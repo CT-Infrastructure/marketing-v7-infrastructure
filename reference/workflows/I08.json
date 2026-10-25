@@ -1,0 +1,70 @@
+{
+  "id": "I08",
+  "name": "Private access and distinct VPN control planes",
+  "family": "Infrastructure and recovery",
+  "subfamily": "Infrastructure and recovery",
+  "trigger": "Remote administration or VPN migration",
+  "steps": [
+    {
+      "action": "Inventory hosted Tailscale and local Headscale separately",
+      "software": "Tailscale / Headscale"
+    },
+    {
+      "action": "Choose the intended control plane per device",
+      "software": "Authorized account owner"
+    },
+    {
+      "action": "Preserve enrollment and ACL policy references",
+      "software": "SOPS / age"
+    },
+    {
+      "action": "Validate routes, DNS, expiry and revocation",
+      "software": "Tailscale / Headscale"
+    },
+    {
+      "action": "Prove independent LAN console fallback",
+      "software": "OpenSSH / local console"
+    }
+  ],
+  "gate": "Access and revocation tested?",
+  "output": "Approved private-management paths without assumed federation",
+  "acceptance_tests": [
+    "Wrong-tailnet access denied",
+    "Headscale outage does not eliminate local recovery"
+  ],
+  "upstream": [
+    "I06",
+    "I07"
+  ],
+  "handoffs": [
+    "I13",
+    "I29",
+    "I35"
+  ],
+  "source": "Sources/Legacy/docs/rebuild-runbook.md; Sources/V7/Consolidated_Self_Hosted_Technology_Stack_v7_2026-10-25.md",
+  "conditional": false,
+  "notes": "",
+  "failure": "Stop the change, preserve source and rollback generation, keep destination isolated, record the failed acceptance check in OpenProject. No broad restart, pruning, privilege bypass, or automatic scope expansion.",
+  "status": "DESIGN_SPECIFIED_NOT_DEPLOYED",
+  "baseline": "V7",
+  "consolidation_revision": 1,
+  "controls": [
+    "X11"
+  ],
+  "runtime_dependencies": [],
+  "software": [
+    "Authorized account owner",
+    "OpenSSH / local console",
+    "SOPS / age",
+    "Tailscale / Headscale"
+  ],
+  "source_class": "consolidated-reference-design",
+  "run_contract": {
+    "owner": "Assigned accountable role in OpenProject before activation",
+    "idempotency": "client_id + source_system + source_event_id + action_scope + approved_revision",
+    "retry": "Bounded retry only after retryability classification; unknown remote effects HOLD",
+    "observability": "workflow_id, run_id, correlation_id, state and redacted error; no raw PII labels",
+    "recovery": "Restore HOLD; reapply suppression/deletion and reconcile external receipts before replay",
+    "completion": "Named output plus acceptance evidence, not merely a running service"
+  }
+}

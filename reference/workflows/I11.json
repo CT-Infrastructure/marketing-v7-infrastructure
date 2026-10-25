@@ -1,0 +1,71 @@
+{
+  "id": "I11",
+  "name": "Docker and mixed-Podman migration to Quadlet",
+  "family": "Infrastructure and recovery",
+  "subfamily": "Infrastructure and recovery",
+  "trigger": "Selected workload moves to V7 runtime",
+  "steps": [
+    {
+      "action": "Capture exact image, source, mounts and override order",
+      "software": "Legacy recovery manifest"
+    },
+    {
+      "action": "Export application-consistent state, not live engine internals",
+      "software": "pgBackRest / mariadb-backup / restic"
+    },
+    {
+      "action": "Translate lifecycle and networking explicitly",
+      "software": "Podman / Quadlet"
+    },
+    {
+      "action": "Validate rootless limits and supported app dependencies",
+      "software": "systemd / application tests"
+    },
+    {
+      "action": "Fence old scheduler before activating new owner",
+      "software": "Operator / credentials"
+    }
+  ],
+  "gate": "Feature parity and single-owner test passed?",
+  "output": "Versioned Quadlet deployment or explicit compatibility exception",
+  "acceptance_tests": [
+    "No blanket compose up",
+    "No direct transplant of live Docker storage"
+  ],
+  "upstream": [
+    "I02",
+    "I10"
+  ],
+  "handoffs": [
+    "I24",
+    "I33",
+    "X11"
+  ],
+  "source": "Sources/Legacy/docs/rebuild-runbook.md; Sources/V7/Consolidated_Self_Hosted_Technology_Stack_v7_2026-10-25.md",
+  "conditional": false,
+  "notes": "",
+  "failure": "Stop the change, preserve source and rollback generation, keep destination isolated, record the failed acceptance check in OpenProject. No broad restart, pruning, privilege bypass, or automatic scope expansion.",
+  "status": "DESIGN_SPECIFIED_NOT_DEPLOYED",
+  "baseline": "V7",
+  "consolidation_revision": 1,
+  "controls": [
+    "X11"
+  ],
+  "runtime_dependencies": [],
+  "software": [
+    "Legacy recovery manifest",
+    "Operator / credentials",
+    "Podman / Quadlet",
+    "pgBackRest / mariadb-backup / restic",
+    "systemd / application tests"
+  ],
+  "source_class": "consolidated-reference-design",
+  "run_contract": {
+    "owner": "Assigned accountable role in OpenProject before activation",
+    "idempotency": "client_id + source_system + source_event_id + action_scope + approved_revision",
+    "retry": "Bounded retry only after retryability classification; unknown remote effects HOLD",
+    "observability": "workflow_id, run_id, correlation_id, state and redacted error; no raw PII labels",
+    "recovery": "Restore HOLD; reapply suppression/deletion and reconcile external receipts before replay",
+    "completion": "Named output plus acceptance evidence, not merely a running service"
+  }
+}

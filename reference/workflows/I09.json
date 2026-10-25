@@ -1,0 +1,79 @@
+{
+  "id": "I09",
+  "name": "Libvirt guest preservation and Proxmox migration",
+  "family": "Infrastructure and recovery",
+  "subfamily": "Infrastructure and recovery",
+  "trigger": "Approved VM migration",
+  "steps": [
+    {
+      "action": "Capture guest XML, disks, chains, firmware and TPM state",
+      "software": "Authorized libvirt owner"
+    },
+    {
+      "action": "Record stopped/autostart and active-run intent",
+      "software": "OpenProject"
+    },
+    {
+      "action": "Produce consistent guest and application checkpoints",
+      "software": "Existing backup tools"
+    },
+    {
+      "action": "Import reviewed disks into isolated Proxmox guests",
+      "software": "Proxmox VE / QEMU tools"
+    },
+    {
+      "action": "Reconstruct devices, NICs and boot settings explicitly",
+      "software": "Proxmox VE"
+    },
+    {
+      "action": "Validate guest services before ownership transfer",
+      "software": "Guest owner"
+    }
+  ],
+  "gate": "Guest state and firmware acceptance passed?",
+  "output": "Restored VM with verified disks and preserved activation intent",
+  "acceptance_tests": [
+    "All 12 historical guests dispositioned",
+    "No XML copy treated as complete Proxmox migration"
+  ],
+  "upstream": [
+    "I02",
+    "I04"
+  ],
+  "handoffs": [
+    "I24",
+    "I30",
+    "L01",
+    "L02",
+    "L03",
+    "L04"
+  ],
+  "source": "Sources/Legacy/docs/rebuild-runbook.md; Sources/V7/Consolidated_Self_Hosted_Technology_Stack_v7_2026-10-25.md",
+  "conditional": false,
+  "notes": "",
+  "failure": "Stop the change, preserve source and rollback generation, keep destination isolated, record the failed acceptance check in OpenProject. No broad restart, pruning, privilege bypass, or automatic scope expansion.",
+  "status": "DESIGN_SPECIFIED_NOT_DEPLOYED",
+  "baseline": "V7",
+  "consolidation_revision": 1,
+  "controls": [
+    "X11"
+  ],
+  "runtime_dependencies": [],
+  "software": [
+    "Authorized libvirt owner",
+    "Existing backup tools",
+    "Guest owner",
+    "OpenProject",
+    "Proxmox VE",
+    "Proxmox VE / QEMU tools"
+  ],
+  "source_class": "consolidated-reference-design",
+  "run_contract": {
+    "owner": "Assigned accountable role in OpenProject before activation",
+    "idempotency": "client_id + source_system + source_event_id + action_scope + approved_revision",
+    "retry": "Bounded retry only after retryability classification; unknown remote effects HOLD",
+    "observability": "workflow_id, run_id, correlation_id, state and redacted error; no raw PII labels",
+    "recovery": "Restore HOLD; reapply suppression/deletion and reconcile external receipts before replay",
+    "completion": "Named output plus acceptance evidence, not merely a running service"
+  }
+}

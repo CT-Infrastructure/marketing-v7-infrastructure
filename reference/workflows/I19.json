@@ -1,0 +1,72 @@
+{
+  "id": "I19",
+  "name": "Observability and actionable alerting",
+  "family": "Infrastructure and recovery",
+  "subfamily": "Infrastructure and recovery",
+  "trigger": "Service onboarding or monitoring review",
+  "steps": [
+    {
+      "action": "Collect metrics and redacted logs with owners",
+      "software": "OTel Collector / exporters"
+    },
+    {
+      "action": "Store metrics and logs separately",
+      "software": "Prometheus / Loki"
+    },
+    {
+      "action": "Create availability, freshness, queue and resource panels",
+      "software": "Grafana"
+    },
+    {
+      "action": "Route actionable alerts and runbook references",
+      "software": "Grafana alerting / OpenProject"
+    },
+    {
+      "action": "Test alert delivery outside marketing dispatch",
+      "software": "Operator"
+    }
+  ],
+  "gate": "Failure signal and notification path tested?",
+  "output": "Operational dashboards and accountable alert routes",
+  "acceptance_tests": [
+    "No PII in metric labels",
+    "Main-host failure detection limitation documented"
+  ],
+  "upstream": [
+    "I10",
+    "L07"
+  ],
+  "handoffs": [
+    "I20",
+    "I21",
+    "X09",
+    "I34"
+  ],
+  "source": "Sources/Legacy/docs/rebuild-runbook.md; Sources/V7/Consolidated_Self_Hosted_Technology_Stack_v7_2026-10-25.md",
+  "conditional": false,
+  "notes": "",
+  "failure": "Stop the change, preserve source and rollback generation, keep destination isolated, record the failed acceptance check in OpenProject. No broad restart, pruning, privilege bypass, or automatic scope expansion.",
+  "status": "DESIGN_SPECIFIED_NOT_DEPLOYED",
+  "baseline": "V7",
+  "consolidation_revision": 1,
+  "controls": [
+    "X11"
+  ],
+  "runtime_dependencies": [],
+  "software": [
+    "Grafana",
+    "Grafana alerting / OpenProject",
+    "OTel Collector / exporters",
+    "Operator",
+    "Prometheus / Loki"
+  ],
+  "source_class": "consolidated-reference-design",
+  "run_contract": {
+    "owner": "Assigned accountable role in OpenProject before activation",
+    "idempotency": "client_id + source_system + source_event_id + action_scope + approved_revision",
+    "retry": "Bounded retry only after retryability classification; unknown remote effects HOLD",
+    "observability": "workflow_id, run_id, correlation_id, state and redacted error; no raw PII labels",
+    "recovery": "Restore HOLD; reapply suppression/deletion and reconcile external receipts before replay",
+    "completion": "Named output plus acceptance evidence, not merely a running service"
+  }
+}
