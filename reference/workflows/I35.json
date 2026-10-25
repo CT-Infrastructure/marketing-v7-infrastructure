@@ -1,0 +1,72 @@
+{
+  "id": "I35",
+  "name": "Break-glass access and account recovery",
+  "family": "Infrastructure and recovery",
+  "subfamily": "Infrastructure and recovery",
+  "trigger": "SSO, VPN or main-server failure",
+  "steps": [
+    {
+      "action": "Retrieve approved offline credentials and contact tree",
+      "software": "KeePassXC / offline custody"
+    },
+    {
+      "action": "Use local console or independent authorized LAN access",
+      "software": "OpenSSH / console"
+    },
+    {
+      "action": "Restore time, DNS and identity dependencies in order",
+      "software": "OpenWrt / chrony / Keycloak"
+    },
+    {
+      "action": "Audit emergency actions and rotate used secrets",
+      "software": "OpenProject / SOPS"
+    },
+    {
+      "action": "Test normal access before closing emergency session",
+      "software": "Operator"
+    }
+  ],
+  "gate": "Normal access restored and emergency keys reconciled?",
+  "output": "Recovery access with a complete audit trail",
+  "acceptance_tests": [
+    "No dependency on failed Keycloak for bootstrap",
+    "Emergency action does not bypass channel permissions"
+  ],
+  "upstream": [
+    "I03",
+    "I08",
+    "I13",
+    "I29"
+  ],
+  "handoffs": [
+    "I12",
+    "I24"
+  ],
+  "source": "Sources/Legacy/docs/rebuild-runbook.md; Sources/V7/Consolidated_Self_Hosted_Technology_Stack_v7_2026-10-25.md",
+  "conditional": false,
+  "notes": "",
+  "failure": "Stop the change, preserve source and rollback generation, keep destination isolated, record the failed acceptance check in OpenProject. No broad restart, pruning, privilege bypass, or automatic scope expansion.",
+  "status": "DESIGN_SPECIFIED_NOT_DEPLOYED",
+  "baseline": "V7",
+  "consolidation_revision": 1,
+  "controls": [
+    "X11"
+  ],
+  "runtime_dependencies": [],
+  "software": [
+    "KeePassXC / offline custody",
+    "OpenProject / SOPS",
+    "OpenSSH / console",
+    "OpenWrt / chrony / Keycloak",
+    "Operator"
+  ],
+  "source_class": "consolidated-reference-design",
+  "run_contract": {
+    "owner": "Assigned accountable role in OpenProject before activation",
+    "idempotency": "client_id + source_system + source_event_id + action_scope + approved_revision",
+    "retry": "Bounded retry only after retryability classification; unknown remote effects HOLD",
+    "observability": "workflow_id, run_id, correlation_id, state and redacted error; no raw PII labels",
+    "recovery": "Restore HOLD; reapply suppression/deletion and reconcile external receipts before replay",
+    "completion": "Named output plus acceptance evidence, not merely a running service"
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "id": "I15",
+  "name": "PostgreSQL and pgvector service foundation",
+  "family": "Infrastructure and recovery",
+  "subfamily": "Infrastructure and recovery",
+  "trigger": "Data-plane provisioning",
+  "steps": [
+    {
+      "action": "Create supported PostgreSQL release and isolated databases",
+      "software": "PostgreSQL"
+    },
+    {
+      "action": "Assign per-app and operational-ledger roles",
+      "software": "Ansible / SOPS"
+    },
+    {
+      "action": "Enable pgvector only where retrieval requires it",
+      "software": "pgvector"
+    },
+    {
+      "action": "Configure backups, WAL retention and resource limits",
+      "software": "pgBackRest / systemd"
+    },
+    {
+      "action": "Test restore and least-privilege connections",
+      "software": "PostgreSQL / operator"
+    }
+  ],
+  "gate": "Database restore and authorization passed?",
+  "output": "App databases and isolated operational schemas",
+  "acceptance_tests": [
+    "No direct writes into unsupported app schemas",
+    "Embedding model remains separate from pgvector"
+  ],
+  "upstream": [
+    "I10"
+  ],
+  "handoffs": [
+    "X02",
+    "X10",
+    "E11",
+    "V02",
+    "I23"
+  ],
+  "source": "Sources/Legacy/docs/rebuild-runbook.md; Sources/V7/Consolidated_Self_Hosted_Technology_Stack_v7_2026-10-25.md",
+  "conditional": false,
+  "notes": "",
+  "failure": "Stop the change, preserve source and rollback generation, keep destination isolated, record the failed acceptance check in OpenProject. No broad restart, pruning, privilege bypass, or automatic scope expansion.",
+  "status": "DESIGN_SPECIFIED_NOT_DEPLOYED",
+  "baseline": "V7",
+  "consolidation_revision": 1,
+  "controls": [
+    "X11"
+  ],
+  "runtime_dependencies": [],
+  "software": [
+    "Ansible / SOPS",
+    "PostgreSQL",
+    "PostgreSQL / operator",
+    "pgBackRest / systemd",
+    "pgvector"
+  ],
+  "source_class": "consolidated-reference-design",
+  "run_contract": {
+    "owner": "Assigned accountable role in OpenProject before activation",
+    "idempotency": "client_id + source_system + source_event_id + action_scope + approved_revision",
+    "retry": "Bounded retry only after retryability classification; unknown remote effects HOLD",
+    "observability": "workflow_id, run_id, correlation_id, state and redacted error; no raw PII labels",
+    "recovery": "Restore HOLD; reapply suppression/deletion and reconcile external receipts before replay",
+    "completion": "Named output plus acceptance evidence, not merely a running service"
+  }
+}

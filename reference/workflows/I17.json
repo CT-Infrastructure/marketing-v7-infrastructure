@@ -1,0 +1,71 @@
+{
+  "id": "I17",
+  "name": "Valkey and native queue compatibility",
+  "family": "Infrastructure and recovery",
+  "subfamily": "Infrastructure and recovery",
+  "trigger": "Queue-dependent application deployment",
+  "steps": [
+    {
+      "action": "Identify vendor-required Redis semantics",
+      "software": "Application release manifest"
+    },
+    {
+      "action": "Test Valkey against exact selected image",
+      "software": "Valkey / app test suite"
+    },
+    {
+      "action": "Isolate queue namespaces, credentials and retention",
+      "software": "Ansible"
+    },
+    {
+      "action": "Verify restart, backlog and failure behavior",
+      "software": "Prometheus / systemd"
+    },
+    {
+      "action": "Approve exception if vendor Redis is required",
+      "software": "OpenProject"
+    }
+  ],
+  "gate": "Compatibility evidenced?",
+  "output": "Validated cache/queue runtime or documented blocked exception",
+  "acceptance_tests": [
+    "No untested drop-in assumption",
+    "Queue loss cannot create unauthorized replays"
+  ],
+  "upstream": [
+    "I10"
+  ],
+  "handoffs": [
+    "X02",
+    "X05",
+    "M17",
+    "I33"
+  ],
+  "source": "Sources/Legacy/docs/rebuild-runbook.md; Sources/V7/Consolidated_Self_Hosted_Technology_Stack_v7_2026-10-25.md",
+  "conditional": false,
+  "notes": "",
+  "failure": "Stop the change, preserve source and rollback generation, keep destination isolated, record the failed acceptance check in OpenProject. No broad restart, pruning, privilege bypass, or automatic scope expansion.",
+  "status": "DESIGN_SPECIFIED_NOT_DEPLOYED",
+  "baseline": "V7",
+  "consolidation_revision": 1,
+  "controls": [
+    "X11"
+  ],
+  "runtime_dependencies": [],
+  "software": [
+    "Ansible",
+    "Application release manifest",
+    "OpenProject",
+    "Prometheus / systemd",
+    "Valkey / app test suite"
+  ],
+  "source_class": "consolidated-reference-design",
+  "run_contract": {
+    "owner": "Assigned accountable role in OpenProject before activation",
+    "idempotency": "client_id + source_system + source_event_id + action_scope + approved_revision",
+    "retry": "Bounded retry only after retryability classification; unknown remote effects HOLD",
+    "observability": "workflow_id, run_id, correlation_id, state and redacted error; no raw PII labels",
+    "recovery": "Restore HOLD; reapply suppression/deletion and reconcile external receipts before replay",
+    "completion": "Named output plus acceptance evidence, not merely a running service"
+  }
+}

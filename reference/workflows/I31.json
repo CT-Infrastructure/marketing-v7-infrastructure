@@ -1,0 +1,75 @@
+{
+  "id": "I31",
+  "name": "Non-core workload preservation and scope isolation",
+  "family": "Infrastructure and recovery",
+  "subfamily": "Infrastructure and recovery",
+  "trigger": "Legacy service not selected in core V7",
+  "steps": [
+    {
+      "action": "Map every legacy service to an explicit disposition",
+      "software": "Source register"
+    },
+    {
+      "action": "Preserve data, configuration and stopped-state intent",
+      "software": "restic / source owner"
+    },
+    {
+      "action": "Separate business baseline from retained exceptions",
+      "software": "Proxmox / network boundaries"
+    },
+    {
+      "action": "Define owner, cost and functional acceptance",
+      "software": "OpenProject"
+    },
+    {
+      "action": "Activate only an approved legacy scope",
+      "software": "Native runtime owner"
+    }
+  ],
+  "gate": "Separate exception approved?",
+  "output": "Preserved legacy workload without automatic core adoption",
+  "acceptance_tests": [
+    "Every unmatched row defaults HOLD/preserve",
+    "No blanket service removal"
+  ],
+  "upstream": [
+    "I02"
+  ],
+  "handoffs": [
+    "L01",
+    "L02",
+    "L03",
+    "L04",
+    "L05",
+    "L06",
+    "L07",
+    "L08"
+  ],
+  "source": "Sources/Legacy/docs/rebuild-runbook.md; Sources/V7/Consolidated_Self_Hosted_Technology_Stack_v7_2026-10-25.md",
+  "conditional": false,
+  "notes": "",
+  "failure": "Stop the change, preserve source and rollback generation, keep destination isolated, record the failed acceptance check in OpenProject. No broad restart, pruning, privilege bypass, or automatic scope expansion.",
+  "status": "DESIGN_SPECIFIED_NOT_DEPLOYED",
+  "baseline": "V7",
+  "consolidation_revision": 1,
+  "controls": [
+    "X11"
+  ],
+  "runtime_dependencies": [],
+  "software": [
+    "Native runtime owner",
+    "OpenProject",
+    "Proxmox / network boundaries",
+    "Source register",
+    "restic / source owner"
+  ],
+  "source_class": "consolidated-reference-design",
+  "run_contract": {
+    "owner": "Assigned accountable role in OpenProject before activation",
+    "idempotency": "client_id + source_system + source_event_id + action_scope + approved_revision",
+    "retry": "Bounded retry only after retryability classification; unknown remote effects HOLD",
+    "observability": "workflow_id, run_id, correlation_id, state and redacted error; no raw PII labels",
+    "recovery": "Restore HOLD; reapply suppression/deletion and reconcile external receipts before replay",
+    "completion": "Named output plus acceptance evidence, not merely a running service"
+  }
+}

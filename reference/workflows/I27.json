@@ -1,0 +1,69 @@
+{
+  "id": "I27",
+  "name": "UPS event and graceful power recovery",
+  "family": "Infrastructure and recovery",
+  "subfamily": "Infrastructure and recovery",
+  "trigger": "Low battery, power loss or planned shutdown",
+  "steps": [
+    {
+      "action": "Measure UPS runtime and shutdown thresholds",
+      "software": "NUT"
+    },
+    {
+      "action": "Stop new render jobs and external dispatch",
+      "software": "systemd / channel guards"
+    },
+    {
+      "action": "Drain or safely interrupt critical sessions",
+      "software": "Pipecat / applications"
+    },
+    {
+      "action": "Checkpoint data and shut guests down in dependency order",
+      "software": "PostgreSQL / MariaDB / Proxmox"
+    },
+    {
+      "action": "On power return validate storage and restore in HOLD",
+      "software": "smartmontools / systemd"
+    }
+  ],
+  "gate": "Power, storage and dependency readiness restored?",
+  "output": "Controlled shutdown/restart evidence",
+  "acceptance_tests": [
+    "Router and recovery access power dependencies considered",
+    "No call/send burst after power return"
+  ],
+  "upstream": [
+    "I04"
+  ],
+  "handoffs": [
+    "I33",
+    "I24"
+  ],
+  "source": "Sources/Legacy/docs/rebuild-runbook.md; Sources/V7/Consolidated_Self_Hosted_Technology_Stack_v7_2026-10-25.md",
+  "conditional": false,
+  "notes": "",
+  "failure": "Stop the change, preserve source and rollback generation, keep destination isolated, record the failed acceptance check in OpenProject. No broad restart, pruning, privilege bypass, or automatic scope expansion.",
+  "status": "DESIGN_SPECIFIED_NOT_DEPLOYED",
+  "baseline": "V7",
+  "consolidation_revision": 1,
+  "controls": [
+    "X11"
+  ],
+  "runtime_dependencies": [],
+  "software": [
+    "NUT",
+    "Pipecat / applications",
+    "PostgreSQL / MariaDB / Proxmox",
+    "smartmontools / systemd",
+    "systemd / channel guards"
+  ],
+  "source_class": "consolidated-reference-design",
+  "run_contract": {
+    "owner": "Assigned accountable role in OpenProject before activation",
+    "idempotency": "client_id + source_system + source_event_id + action_scope + approved_revision",
+    "retry": "Bounded retry only after retryability classification; unknown remote effects HOLD",
+    "observability": "workflow_id, run_id, correlation_id, state and redacted error; no raw PII labels",
+    "recovery": "Restore HOLD; reapply suppression/deletion and reconcile external receipts before replay",
+    "completion": "Named output plus acceptance evidence, not merely a running service"
+  }
+}

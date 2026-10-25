@@ -1,0 +1,72 @@
+{
+  "id": "I13",
+  "name": "SSO, local authentication and client isolation",
+  "family": "Infrastructure and recovery",
+  "subfamily": "Infrastructure and recovery",
+  "trigger": "Application enrollment or client onboarding",
+  "steps": [
+    {
+      "action": "Map roles, client boundaries and local emergency accounts",
+      "software": "OpenProject"
+    },
+    {
+      "action": "Enable native OIDC where supported",
+      "software": "Keycloak / application"
+    },
+    {
+      "action": "Use application-local authentication when required",
+      "software": "Native application"
+    },
+    {
+      "action": "Apply site, project, asset and token scopes",
+      "software": "Application owners"
+    },
+    {
+      "action": "Test cross-client denial and break-glass audit",
+      "software": "Playwright / operator"
+    }
+  ],
+  "gate": "Tenant and role boundaries proven?",
+  "output": "Tested authentication/authorization profile per app",
+  "acceptance_tests": [
+    "Keycloak not assumed to proxy every app",
+    "Segment labels not treated as hard tenancy"
+  ],
+  "upstream": [
+    "I08",
+    "I12"
+  ],
+  "handoffs": [
+    "M16",
+    "M18",
+    "M19",
+    "I35"
+  ],
+  "source": "Sources/Legacy/docs/rebuild-runbook.md; Sources/V7/Consolidated_Self_Hosted_Technology_Stack_v7_2026-10-25.md",
+  "conditional": false,
+  "notes": "",
+  "failure": "Stop the change, preserve source and rollback generation, keep destination isolated, record the failed acceptance check in OpenProject. No broad restart, pruning, privilege bypass, or automatic scope expansion.",
+  "status": "DESIGN_SPECIFIED_NOT_DEPLOYED",
+  "baseline": "V7",
+  "consolidation_revision": 1,
+  "controls": [
+    "X11"
+  ],
+  "runtime_dependencies": [],
+  "software": [
+    "Application owners",
+    "Keycloak / application",
+    "Native application",
+    "OpenProject",
+    "Playwright / operator"
+  ],
+  "source_class": "consolidated-reference-design",
+  "run_contract": {
+    "owner": "Assigned accountable role in OpenProject before activation",
+    "idempotency": "client_id + source_system + source_event_id + action_scope + approved_revision",
+    "retry": "Bounded retry only after retryability classification; unknown remote effects HOLD",
+    "observability": "workflow_id, run_id, correlation_id, state and redacted error; no raw PII labels",
+    "recovery": "Restore HOLD; reapply suppression/deletion and reconcile external receipts before replay",
+    "completion": "Named output plus acceptance evidence, not merely a running service"
+  }
+}

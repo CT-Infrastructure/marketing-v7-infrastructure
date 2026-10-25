@@ -1,0 +1,71 @@
+{
+  "id": "I07",
+  "name": "Network segmentation and ingress policy",
+  "family": "Infrastructure and recovery",
+  "subfamily": "Infrastructure and recovery",
+  "trigger": "New service, VLAN or cutover",
+  "steps": [
+    {
+      "action": "Define management, application, data, sandbox and guest zones",
+      "software": "Ansible inventory"
+    },
+    {
+      "action": "Review IPv4 and IPv6 effective forwarding",
+      "software": "firewall4 / nftables"
+    },
+    {
+      "action": "Permit only required application and provider paths",
+      "software": "OpenWrt / host firewall"
+    },
+    {
+      "action": "Keep databases, ARI and admin interfaces private",
+      "software": "nftables"
+    },
+    {
+      "action": "Test allowed and denied paths from each vantage",
+      "software": "Playwright / blackbox_exporter"
+    }
+  ],
+  "gate": "Positive and negative exposure tests pass?",
+  "output": "Least-privilege traffic matrix and tested rules",
+  "acceptance_tests": [
+    "No unintended WAN administration",
+    "IPv6 policy agrees with intended exposure"
+  ],
+  "upstream": [
+    "I05"
+  ],
+  "handoffs": [
+    "I08",
+    "I10",
+    "I14",
+    "V01"
+  ],
+  "source": "Sources/Legacy/docs/rebuild-runbook.md; Sources/V7/Consolidated_Self_Hosted_Technology_Stack_v7_2026-10-25.md",
+  "conditional": false,
+  "notes": "",
+  "failure": "Stop the change, preserve source and rollback generation, keep destination isolated, record the failed acceptance check in OpenProject. No broad restart, pruning, privilege bypass, or automatic scope expansion.",
+  "status": "DESIGN_SPECIFIED_NOT_DEPLOYED",
+  "baseline": "V7",
+  "consolidation_revision": 1,
+  "controls": [
+    "X11"
+  ],
+  "runtime_dependencies": [],
+  "software": [
+    "Ansible inventory",
+    "OpenWrt / host firewall",
+    "Playwright / blackbox_exporter",
+    "firewall4 / nftables",
+    "nftables"
+  ],
+  "source_class": "consolidated-reference-design",
+  "run_contract": {
+    "owner": "Assigned accountable role in OpenProject before activation",
+    "idempotency": "client_id + source_system + source_event_id + action_scope + approved_revision",
+    "retry": "Bounded retry only after retryability classification; unknown remote effects HOLD",
+    "observability": "workflow_id, run_id, correlation_id, state and redacted error; no raw PII labels",
+    "recovery": "Restore HOLD; reapply suppression/deletion and reconcile external receipts before replay",
+    "completion": "Named output plus acceptance evidence, not merely a running service"
+  }
+}

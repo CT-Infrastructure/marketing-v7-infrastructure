@@ -1,0 +1,70 @@
+{
+  "id": "I05",
+  "name": "Isolated OpenWrt router replacement",
+  "family": "Infrastructure and recovery",
+  "subfamily": "Infrastructure and recovery",
+  "trigger": "Approved router migration window",
+  "steps": [
+    {
+      "action": "Capture UCI, package list and protected credentials",
+      "software": "OpenWrt / operator"
+    },
+    {
+      "action": "Match hardware target and firmware compatibility",
+      "software": "OpenWrt"
+    },
+    {
+      "action": "Build new router off the production LAN",
+      "software": "LuCI / OpenSSH tools"
+    },
+    {
+      "action": "Map physical ports, WAN, Wi-Fi and recovery access",
+      "software": "firewall4 / dnsmasq"
+    },
+    {
+      "action": "Validate safe rollback to original router",
+      "software": "Operator"
+    }
+  ],
+  "gate": "Isolated router acceptance passed?",
+  "output": "Prepared router; production cutover remains gated",
+  "acceptance_tests": [
+    "No simultaneous DHCP authorities",
+    "Original router can be reconnected"
+  ],
+  "upstream": [
+    "I02"
+  ],
+  "handoffs": [
+    "I06",
+    "I07",
+    "I36"
+  ],
+  "source": "Sources/Legacy/docs/rebuild-runbook.md; Sources/V7/Consolidated_Self_Hosted_Technology_Stack_v7_2026-10-25.md",
+  "conditional": false,
+  "notes": "",
+  "failure": "Stop the change, preserve source and rollback generation, keep destination isolated, record the failed acceptance check in OpenProject. No broad restart, pruning, privilege bypass, or automatic scope expansion.",
+  "status": "DESIGN_SPECIFIED_NOT_DEPLOYED",
+  "baseline": "V7",
+  "consolidation_revision": 1,
+  "controls": [
+    "X11"
+  ],
+  "runtime_dependencies": [],
+  "software": [
+    "LuCI / OpenSSH tools",
+    "OpenWrt",
+    "OpenWrt / operator",
+    "Operator",
+    "firewall4 / dnsmasq"
+  ],
+  "source_class": "consolidated-reference-design",
+  "run_contract": {
+    "owner": "Assigned accountable role in OpenProject before activation",
+    "idempotency": "client_id + source_system + source_event_id + action_scope + approved_revision",
+    "retry": "Bounded retry only after retryability classification; unknown remote effects HOLD",
+    "observability": "workflow_id, run_id, correlation_id, state and redacted error; no raw PII labels",
+    "recovery": "Restore HOLD; reapply suppression/deletion and reconcile external receipts before replay",
+    "completion": "Named output plus acceptance evidence, not merely a running service"
+  }
+}
