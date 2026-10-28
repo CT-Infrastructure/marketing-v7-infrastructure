@@ -360,7 +360,7 @@ with tempfile.TemporaryDirectory(prefix='cp027-ci-') as temporary:
     if any(parent.is_symlink() for parent in (namespace_tests_source,*namespace_tests_source.parents)):
         raise RuntimeError('Namespace test source symlink refused')
     namespace_tests_bytes=namespace_tests_source.read_bytes()
-    if hashlib.sha256(namespace_tests_bytes).hexdigest()!='dda0cc88af248dba6acd3853c6b591c8168188ee81f364cbfb3dd3ed96b2e56e':
+    if hashlib.sha256(namespace_tests_bytes).hexdigest()!='87956a65f112aff2de3e57d13173e4ce25407dc9715085e78e8dcb89b98aa7b2':
         raise RuntimeError('Namespace test source changed')
     namespace_tests=private/'namespace-tests.py'; private_file(namespace_tests,namespace_tests_bytes,0o400)
     wrapper_source=private/'wrapper-source.sh'
