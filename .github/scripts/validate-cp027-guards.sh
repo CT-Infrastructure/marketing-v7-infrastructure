@@ -17,15 +17,17 @@ PAYLOADS = {'./usr/bin/bwrap':(72160,'e318903862396f96de3df57264e0158682b952fd3f
             './usr/share/doc/bubblewrap/copyright':(3388,'229a402fddba5c81005950f28de162359383cba731f5b859b8f82a03c338bf01','COPYRIGHT',0o400)}
 SAFE_ENV = {'PATH':'/usr/bin','LANG':'C.UTF-8','HOME':'/nonexistent'}
 
-def child_failure_diagnostics(phase,child,stdout,stderr,cause,cleanup_errors):
+def child_failure_diagnostics(phase,child,stdout,stderr,cause,cleanup_errors,lifecycle=None):
     """Bounded private retention first; only fixed diagnostic vocabulary is public."""
-    record={'phase':phase,'exit_code':getattr(child,'returncode',None),
-            'signal':-child.returncode if child is not None and child.returncode is not None and child.returncode<0 else None,
+    started = lifecycle['child_started'] if lifecycle is not None else child is not None
+    direct_exit = lifecycle['exit_code'] if lifecycle is not None else getattr(child,'returncode',None)
+    record={'phase':phase,'exit_code':direct_exit,
+            'signal':-direct_exit if direct_exit is not None and direct_exit<0 else None,
             'cause':cause,'cleanup_errors':cleanup_errors,
             'cleanup_scope':'DIRECT_CHILD_ONLY',
-            'child_started':child is not None,
-            'descendant_teardown':'UNVERIFIED' if child is not None else 'NOT_STARTED',
-            'supervisor_teardown_required':child is not None or bool(cleanup_errors),
+            'child_started':started,
+            'descendant_teardown':'UNVERIFIED' if started else 'NOT_STARTED',
+            'supervisor_teardown_required':started or bool(cleanup_errors),
             'stdout_sha256':hashlib.sha256(stdout).hexdigest(),'stderr_sha256':hashlib.sha256(stderr).hexdigest(),
             'stdout_bytes':len(stdout),'stderr_bytes':len(stderr)}
     # No raw exception/environment/argv/archive contents in public output.
@@ -313,7 +315,9 @@ print('CP027_CONFINEMENT_PROBE_OK')
                 raise RuntimeError('Bounded confinement output exceeded')
             if child.returncode!=0:
                 raise RuntimeError('Private verified binary confinement failed; no fallback')
-            return outpath.read_bytes(),errpath.read_bytes()
+            # Value-only facts, never a stale process/PID signaling capability.
+            lifecycle={'child_started':True,'exit_code':child.returncode,'cleanup_scope':'DIRECT_CHILD_ONLY'}
+            return outpath.read_bytes(),errpath.read_bytes(),lifecycle
         except BaseException as error:
             cleanup_errors=stop_owned_child(child)
             try:
@@ -332,22 +336,22 @@ print('CP027_CONFINEMENT_PROBE_OK')
             cleanup_errors=stop_owned_child(child)
             if child is not None and child.stdin is not None: child.stdin.close()
             if cleanup_errors: raise RuntimeError('Owned child cleanup uncertain; supervisor teardown required')
-    probe_stdout,probe_stderr=confined(probe,phase="confinement-probe")
+    probe_stdout,probe_stderr,probe_lifecycle=confined(probe,phase="confinement-probe")
     if probe_stdout.strip()!=b'CP027_CONFINEMENT_PROBE_OK':
-        child_failure_diagnostics('confinement-probe-result',None,probe_stdout,probe_stderr,'InvalidProbeResult',[])
+        child_failure_diagnostics('confinement-probe-result',None,probe_stdout,probe_stderr,'InvalidProbeResult',[],lifecycle=probe_lifecycle)
         raise RuntimeError('Private binary confinement probe invalid')
     for optimized in (False,True):
-        stdout_bytes,stderr_bytes=confined(HARNESS,optimized,phase="guards-optimized" if optimized else "guards-normal")
+        stdout_bytes,stderr_bytes,guard_lifecycle=confined(HARNESS,optimized,phase="guards-optimized" if optimized else "guards-normal")
         lines=stdout_bytes.decode('utf-8',errors='strict').splitlines()
         records=[json.loads(line.removeprefix('CP027_RESULT=')) for line in lines if line.startswith('CP027_RESULT=')]
         if len(records) != 1:
-            child_failure_diagnostics('guards-result',None,stdout_bytes,stderr_bytes,'MissingGuardResult',[])
+            child_failure_diagnostics('guards-result',None,stdout_bytes,stderr_bytes,'MissingGuardResult',[],lifecycle=guard_lifecycle)
             raise SystemExit('Isolated mock execution result missing; no fallback')
         record=records[0]
         if not (record.get('scope')=='MOCK_UNIT_ONLY' and record.get('run')==27 and record.get('expected')==27
                 and record.get('successful') is True and record.get('optimized')==int(optimized)
                 and all(record.get(k)==0 for k in ('errors','failures','skips','unexpected_successes','expected_failures'))):
-            child_failure_diagnostics('guards-result',None,stdout_bytes,stderr_bytes,'RejectedGuardResult',[])
+            child_failure_diagnostics('guards-result',None,stdout_bytes,stderr_bytes,'RejectedGuardResult',[],lifecycle=guard_lifecycle)
             raise SystemExit('Complete unittest result rejected')
         print(json.dumps({'scope':'MOCK_UNIT_ONLY','result':record,
                           'stdout_sha256':hashlib.sha256(stdout_bytes).hexdigest(),
