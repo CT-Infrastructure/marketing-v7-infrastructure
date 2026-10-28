@@ -1,5 +1,5 @@
 """Synthetic namespace guards. Entry is permitted only inside the verified sandbox."""
-import ast,json,os,pathlib,stat,subprocess,unittest,shlex
+import ast,json,os,pathlib,stat,subprocess,unittest,shlex,tempfile,sys
 from unittest import mock
 
 class NamespaceGuards(unittest.TestCase):
@@ -151,9 +151,51 @@ class NamespaceGuards(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'Primitive identity changed'):scope['verified_outer_command'](['fixture-inner'])
         scope['emit_hosted_namespace_facts'].assert_not_called()
 
+    def closed_scope(self):
+        names={'closed_stderr_diagnostic','child_failure_diagnostics','stop_owned_child'}
+        scope={'hashlib':self.ns['hashlib'],'json':json,'os':mock.Mock(),'pathlib':pathlib,'tempfile':tempfile,'sys':sys,'subprocess':subprocess,'private_file':mock.Mock()}
+        scope['PARENT_WRAPPER']=next(n.value.value for n in self.tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='PARENT_WRAPPER' for t in n.targets))
+        exec(compile(ast.Module(body=[n for n in self.tree.body if isinstance(n,ast.FunctionDef) and n.name in names],type_ignores=[]),'actual-closed-diagnostic-functions','exec'),scope)
+        return scope
+    def test_closed_parent_traceback_maps_only_known_guard(self):
+        scope=self.closed_scope();raw=b'Traceback (most recent call last):\n  File "<string>", line 7, in run\nRuntimeError: Parent network is not empty\n'
+        self.assertEqual(scope['closed_stderr_diagnostic'](raw),{'origin':'PARENT_PYTHON','exception':'RuntimeError','guard':'PARENT_NET_CONTENT','parse':'CLOSED_MATCH'})
+    def test_closed_inner_native_startup_and_unknown(self):
+        scope=self.closed_scope()
+        for raw,origin,exception in [(b'  File "<stdin>", line 3, in <module>\nNameError: SECRET\n','INNER_PYTHON','NameError'),(b'bwrap: PRIVATE_PATH failure\n','BWRAP_NATIVE','UNKNOWN'),(b'Fatal Python error: PRIVATE_PATH\nModuleNotFoundError: PRIVATE_SECRET\n','PYTHON_STARTUP','ModuleNotFoundError'),(b'UnrecognizedPrivateError: SECRET\n','UNKNOWN','UNKNOWN')]:
+            with self.subTest(origin=origin):
+                value=scope['closed_stderr_diagnostic'](raw);self.assertEqual(value['origin'],origin);self.assertEqual(value['exception'],exception);self.assertNotIn('PRIVATE',json.dumps(value));self.assertNotIn('SECRET',json.dumps(value))
+    def test_closed_redaction_overflow_malformed_and_conflict(self):
+        scope=self.closed_scope();classify=scope['closed_stderr_diagnostic']
+        private=b'Traceback (most recent call last):\n  File "/private/account/CREDENTIAL", line 9, in SECRET\nPermissionError: /home/PRIVATE token=SECRET\n'
+        value=classify(private);self.assertEqual(value['exception'],'PermissionError');self.assertEqual(value['origin'],'UNKNOWN');self.assertLessEqual(len(json.dumps(value)),1024);self.assertNotIn('PRIVATE',json.dumps(value));self.assertNotIn('SECRET',json.dumps(value));self.assertNotIn('/home',json.dumps(value))
+        for raw in (b'x'*4097,b'\xff',b'\x1b[31mRuntimeError: secret',b'  File "<string>", line 0, in run',b'  File "<string>", line 99999, in run',b'  File "<string>", line 1, in run\n  File "<stdin>", line 1, in run',b'RuntimeError: x\nTypeError: y',b'Parent network is not empty\nPrivate executable replaced',b'\n'*129):
+            with self.subTest(size=len(raw)):
+                value=classify(raw);self.assertEqual(value['parse'],'MALFORMED_OR_OVERFLOW');self.assertEqual(value['origin'],'UNKNOWN');self.assertEqual(value['exception'],'UNKNOWN');self.assertEqual(value['guard'],'UNKNOWN')
+    def test_closed_actual_confined_failure_cleanup_survives_diagnostic_failures(self):
+        scope=self.closed_scope();node=next(n for n in ast.walk(self.tree) if isinstance(n,ast.FunctionDef) and n.name=='confined')
+        binary=b'unit-binary';digest=scope['hashlib'].sha256(binary).hexdigest();info=type('Info',(),{'st_mode':0o100700,'st_uid':1001,'st_nlink':1})()
+        child=mock.Mock();child.returncode=1;child.poll.return_value=1;child.wait.return_value=1
+        process=mock.Mock();process.Popen.return_value=child;process.TimeoutExpired=subprocess.TimeoutExpired
+        executable=mock.Mock();executable.stat.return_value=info;executable.read_bytes.return_value=binary
+        scope.update(bwrap=executable,stat=stat,PAYLOADS={'./usr/bin/bwrap':(len(binary),digest)},base=[],verified_outer_command=mock.Mock(return_value=['owned-unit']),subprocess=process,SAFE_ENV={},limits=mock.Mock(),NET_ASSERT='')
+        scope['os'].getuid.return_value=1001;scope['os'].write.side_effect=OSError('PRIVATE')
+        exec(compile(ast.Module(body=[node],type_ignores=[]),'actual-confined-failure','exec'),scope)
+        with tempfile.TemporaryDirectory() as directory:
+            scope['private']=pathlib.Path(directory);scope['private_file']=lambda path,data,mode:path.write_bytes(data)
+            with mock.patch.dict(scope,closed_stderr_diagnostic=mock.Mock(side_effect=RuntimeError('PRIVATE'))),mock.patch.object(tempfile,'mkdtemp',side_effect=OSError('PRIVATE')),mock.patch('builtins.print',side_effect=OSError('PRIVATE')):
+                with self.assertRaisesRegex(RuntimeError,'Private verified binary confinement failed; no fallback'):scope['confined']('unit',phase='confinement-probe')
+        self.assertEqual(child.wait.call_count,2);child.stdin.close.assert_called_once();scope['verified_outer_command'].assert_called_once();process.Popen.assert_called_once()
+    def test_closed_actual_failure_record_never_exports_raw_stderr(self):
+        scope=self.closed_scope();child=mock.Mock();child.returncode=1;captured=[]
+        with mock.patch.object(tempfile,'mkdtemp',side_effect=OSError('SECRET')),mock.patch('builtins.print',side_effect=lambda text,**kwargs:captured.append(text)):
+            record=scope['child_failure_diagnostics']('confinement-probe',child,b'',b'RuntimeError: /PRIVATE/account SECRET=value', 'RuntimeError',[])
+        self.assertEqual(record['closed_diagnostic']['exception'],'RuntimeError');self.assertTrue(record['supervisor_teardown_required']);self.assertEqual(record['descendant_teardown'],'UNVERIFIED')
+        self.assertEqual(len(captured),1);self.assertNotIn('SECRET',captured[0]);self.assertNotIn('/PRIVATE',captured[0]);self.assertNotIn('account',captured[0])
+
 if __name__=='__main__':
     result=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(NamespaceGuards))
     record={'run':result.testsRun,'errors':len(result.errors),'failures':len(result.failures),'skips':len(result.skipped),
             'expected_failures':len(result.expectedFailures),'unexpected_successes':len(result.unexpectedSuccesses)}
     print('CP027_NAMESPACE_RESULT='+json.dumps(record,sort_keys=True),flush=True)
-    if record!={'run':15,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}: raise SystemExit(1)
+    if record!={'run':20,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}: raise SystemExit(1)

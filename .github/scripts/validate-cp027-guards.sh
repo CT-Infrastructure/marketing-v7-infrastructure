@@ -18,6 +18,47 @@ PAYLOADS = {'./usr/bin/bwrap':(72160,'bf6cf3d4456665f5d80c14eb79a76e0ce87b39a088
             './usr/share/doc/bubblewrap/copyright':(2878,'9b242e22dd0a8b04f14dcee7fd8f9befcb3322ee31fffd865166997f5108a901','COPYRIGHT',0o400)}
 SAFE_ENV = {'PATH':'/usr/bin','LANG':'C.UTF-8','HOME':'/nonexistent'}
 
+def closed_stderr_diagnostic(stderr):
+    # Diagnostic only: closed enums, never raw messages, paths, frames or authority.
+    import re
+    unknown={'origin':'UNKNOWN','exception':'UNKNOWN','guard':'UNKNOWN','parse':'NO_MATCH'}
+    def invalid():return dict(unknown,parse='MALFORMED_OR_OVERFLOW')
+    if type(stderr) is not bytes or len(stderr)>4096:return invalid()
+    try:text=stderr.decode('utf-8')
+    except UnicodeError:return invalid()
+    if any(ord(c)<32 and c not in '\t\n\r' for c in text) or '\x7f' in text:return invalid()
+    lines=text.splitlines()
+    if len(lines)>128:return invalid()
+    classes=('RuntimeError','ValueError','TypeError','OSError','PermissionError','FileNotFoundError',
+             'ImportError','ModuleNotFoundError','AttributeError','NameError','KeyError','MemoryError','OverflowError','SystemExit')
+    reasons={'Parent network is host/unknown':'PARENT_NET_IDENTITY','Parent network is not empty':'PARENT_NET_CONTENT',
+             'Unsafe argv type':'ARGV_OR_COMMAND_IDENTITY','Unsafe namespace prefix':'ARGV_OR_COMMAND_IDENTITY',
+             'Unsafe namespace/capability override':'ARGV_OR_COMMAND_IDENTITY','Command identity mismatch':'ARGV_OR_COMMAND_IDENTITY',
+             'Unowned private executable':'PRIVATE_EXECUTABLE_IDENTITY','Private executable replaced':'PRIVATE_EXECUTABLE_IDENTITY',
+             'Private executable digest mismatch':'PRIVATE_EXECUTABLE_DIGEST','Program input exceeds bound':'INPUT_BOUND',
+             'Inner network namespace identity mismatch':'INNER_NET_IDENTITY','Inner network interface mismatch':'INNER_NET_CONTENT',
+             'Inner network route/address not empty':'INNER_NET_CONTENT','Unexpected host visibility':'PROBE_HOST_VISIBILITY',
+             'Read-only component probe failed':'PROBE_READ_ONLY','Unexpected loopback listener':'PROBE_NETWORK',
+             'Unexpected network interfaces':'PROBE_NETWORK'}
+    origins=set();exceptions=set();guards=set()
+    for line in lines:
+        frame=re.fullmatch(r'  File "(<string>|<stdin>)", line ([0-9]{1,5}), in ([A-Za-z_][A-Za-z_0-9]*|<module>)',line)
+        if frame:
+            if int(frame[2])<1 or (frame[1]=='<string>' and int(frame[2])>len(PARENT_WRAPPER.splitlines())):return invalid()
+            origins.add('PARENT_PYTHON' if frame[1]=='<string>' else 'INNER_PYTHON')
+        if line.startswith('bwrap: '):origins.add('BWRAP_NATIVE')
+        if line.startswith('Fatal Python error:'):origins.add('PYTHON_STARTUP')
+        message=line
+        match=re.fullmatch(r'([A-Za-z_][A-Za-z_0-9]*):(?: (.*))?',line)
+        if match and match[1] in classes:
+            exceptions.add(match[1]);message=match[2] or ''
+        if message in reasons:guards.add(reasons[message])
+    if len(origins)>1 or len(exceptions)>1 or len(guards)>1:return invalid()
+    record={'origin':next(iter(origins),'UNKNOWN'),'exception':next(iter(exceptions),'UNKNOWN'),
+            'guard':next(iter(guards),'UNKNOWN'),'parse':'CLOSED_MATCH' if origins or exceptions or guards else 'NO_MATCH'}
+    if len(json.dumps(record,separators=(',',':')).encode('ascii'))>1024:return invalid()
+    return record
+
 def child_failure_diagnostics(phase,child,stdout,stderr,cause,cleanup_errors,lifecycle=None):
     """Bounded private retention first; only fixed diagnostic vocabulary is public."""
     started = lifecycle['child_started'] if lifecycle is not None else child is not None
@@ -38,6 +79,9 @@ def child_failure_diagnostics(phase,child,stdout,stderr,cause,cleanup_errors,lif
                 'unshare','mount','bind','execvp','user namespace','AppArmor')
     decoded=stderr[:8192].decode('utf-8',errors='replace')
     record['stderr_allowlisted_terms']=[term for term in vocabulary if term in decoded]
+    try:record['closed_diagnostic']=closed_stderr_diagnostic(stderr)
+    except BaseException:
+        record['closed_diagnostic']={'origin':'UNKNOWN','exception':'UNKNOWN','guard':'UNKNOWN','parse':'NO_MATCH'}
     record['private_evidence']='UNAVAILABLE'
     try:
         directory=pathlib.Path(tempfile.mkdtemp(prefix='cp027-failure-'))
@@ -446,7 +490,7 @@ with tempfile.TemporaryDirectory(prefix='cp027-ci-') as temporary:
     if any(parent.is_symlink() for parent in (namespace_tests_source,*namespace_tests_source.parents)):
         raise RuntimeError('Namespace test source symlink refused')
     namespace_tests_bytes=namespace_tests_source.read_bytes()
-    if hashlib.sha256(namespace_tests_bytes).hexdigest()!='5c9c126bf3b6c524e3d7ef9801e4610e4eb191e767a0ce480bf31e99f15a3d65':
+    if hashlib.sha256(namespace_tests_bytes).hexdigest()!='f4a1acae24d755f739562b32be7c937922eef38556ffcfea707d09a665036be6':
         raise RuntimeError('Namespace test source changed')
     namespace_tests=private/'namespace-tests.py'; private_file(namespace_tests,namespace_tests_bytes,0o400)
     wrapper_source=private/'wrapper-source.sh'
@@ -536,7 +580,7 @@ print('CP027_CONFINEMENT_PROBE_OK')
                 phase='namespace-units-optimized' if namespace_optimized else 'namespace-units-normal')
         namespace_records=[json.loads(line.removeprefix('CP027_NAMESPACE_RESULT=')) for line in namespace_stdout.decode().splitlines()
                            if line.startswith('CP027_NAMESPACE_RESULT=')]
-        if len(namespace_records)!=1 or namespace_records[0]!={'run':15,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}:
+        if len(namespace_records)!=1 or namespace_records[0]!={'run':20,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}:
             child_failure_diagnostics('namespace-units-result',None,namespace_stdout,namespace_stderr,'RejectedNamespaceResult',[],lifecycle=namespace_lifecycle)
             raise RuntimeError('Namespace wrapper unit result rejected')
     for optimized in (False,True):
