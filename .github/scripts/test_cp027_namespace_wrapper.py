@@ -270,7 +270,7 @@ class NamespaceGuards(unittest.TestCase):
         return writes[0]
     def test_ipv6_properties_builtin_looking_and_usable_shapes_still_rejected(self):
         # Exact null signature is now eligible only behind the mandatory native gate.
-        current=self.parent();current['ipv6']=[self.ipv6_row()]
+        current=self.parent();current['ipv6']=[self.ipv6_row(f8='00200200')]
         with mock.patch.object(self.ns['os'],'write') as write:self.ns['validate_parent'](1,current)
         write.assert_not_called()
         marker=self.ipv6_failure_marker([self.ipv6_row(f0='20010db8'+'0'*24,f1='40',f4='20010db8'+'0'*23+'1',f8='00000001',f9='PRIVATE_IF')]);record=self.ipv6_parser()(marker)
@@ -325,11 +325,11 @@ class NamespaceGuards(unittest.TestCase):
         code=next(n.value.value for n in self.tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='NET_ASSERT' for t in n.targets));node=next(n for n in ast.parse(code).body if isinstance(n,ast.FunctionDef) and n.name=='ipv6_rows_are_only_null_rejects');scope={};exec(compile(ast.Module(body=[node],type_ignores=[]),'actual-inner-parser','exec'),scope);inner=scope['ipv6_rows_are_only_null_rejects']
         common=next(n for n in ast.parse(pathlib.Path('/network-guards.py').read_text()).body if isinstance(n,ast.FunctionDef) and n.name=='ipv6_rows_are_only_null_rejects')
         self.assertEqual(ast.dump(node,include_attributes=False),ast.dump(common,include_attributes=False))
-        good=self.ipv6_row()
+        good=self.ipv6_row(f8='00200200')
         invalid=[['PRIVATE'],[good]*3,[good,self.ipv6_row(f8='00200201')],[self.ipv6_row(f0='1'+'0'*31)],[self.ipv6_row(f1='01')],[self.ipv6_row(f2='1'+'0'*31)],[self.ipv6_row(f3='01')],[self.ipv6_row(f4='1'+'0'*31)],[self.ipv6_row(f5='fffffffe')],[self.ipv6_row(f7='00000001')],[self.ipv6_row(f9='eth0')],[good+' EXTRA'],['x'*513]]
         invalid += [[self.ipv6_row(f8=format(0x00200200^(1<<bit),'08x'))] for bit in range(32)]
         for fn in (outer,parent,inner):
-            for rows in ([],[good],[good,good],[self.ipv6_row(f6='abcdef01')]):self.assertTrue(fn(rows))
+            for rows in ([],[good],[good,good],[self.ipv6_row(f6='abcdef01',f8='00200200')]):self.assertTrue(fn(rows))
             for rows in invalid:self.assertFalse(fn(rows))
     def test_mandatory_native_gate_rejects_flags_hashes_and_prevents_payload(self):
         module=self.network_module();node=next(n for n in ast.walk(self.tree) if isinstance(n,ast.FunctionDef) and n.name=='qualified_confined')
@@ -354,7 +354,7 @@ class NamespaceGuards(unittest.TestCase):
     def test_native_child_requires_no_inherited_fd_and_precise_errno(self):
         import errno
         module=self.network_module();fake_os=mock.Mock();fake_os.getuid.return_value=1001;fake_os.geteuid.return_value=1001;fake_os.getgid.return_value=1001;fake_os.getegid.return_value=1001;fake_os.fstat.side_effect=OSError(errno.EBADF,'fixture');fake_os.stat.return_value=type('Info',(),{'st_ino':2})()
-        fake_socket=mock.Mock();client=fake_socket.socket.return_value.__enter__.return_value;fake_sys=mock.Mock();fake_sys.flags.optimize=0;snapshot=self.parent()
+        fake_socket=mock.MagicMock();client=fake_socket.socket.return_value.__enter__.return_value;fake_sys=mock.Mock();fake_sys.flags.optimize=0;snapshot=self.parent()
         args=['1','12345','a'*32,'9','1001','1001','b'*64]
         with mock.patch.dict(module,os=fake_os,socket=fake_socket,sys=fake_sys,_custody=mock.Mock(),_no_privileges=mock.Mock(),observe=mock.Mock(return_value=snapshot)):
             client.connect.side_effect=OSError(errno.ENETUNREACH,'fixture');record=module['_child']('--isolated',args);self.assertEqual(record['errno'],errno.ENETUNREACH);self.assertTrue(record['fd_absent'])
