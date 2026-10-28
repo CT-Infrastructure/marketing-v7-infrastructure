@@ -21,7 +21,11 @@ def child_failure_diagnostics(phase,child,stdout,stderr,cause,cleanup_errors):
     """Bounded private retention first; only fixed diagnostic vocabulary is public."""
     record={'phase':phase,'exit_code':getattr(child,'returncode',None),
             'signal':-child.returncode if child is not None and child.returncode is not None and child.returncode<0 else None,
-            'cause':cause,'cleanup_errors':cleanup_errors,'supervisor_teardown_required':bool(cleanup_errors),
+            'cause':cause,'cleanup_errors':cleanup_errors,
+            'cleanup_scope':'DIRECT_CHILD_ONLY',
+            'child_started':child is not None,
+            'descendant_teardown':'UNVERIFIED' if child is not None else 'NOT_STARTED',
+            'supervisor_teardown_required':child is not None or bool(cleanup_errors),
             'stdout_sha256':hashlib.sha256(stdout).hexdigest(),'stderr_sha256':hashlib.sha256(stderr).hexdigest(),
             'stdout_bytes':len(stdout),'stderr_bytes':len(stderr)}
     # No raw exception/environment/argv/archive contents in public output.
@@ -41,7 +45,14 @@ def child_failure_diagnostics(phase,child,stdout,stderr,cause,cleanup_errors):
         record['private_evidence']=str(directory)
     except BaseException as error:
         record['evidence_write_error']=type(error).__name__
-    print('CP027_FAILURE='+json.dumps(record,sort_keys=True),file=sys.stderr,flush=True)
+    try:
+        print('CP027_FAILURE='+json.dumps(record,sort_keys=True),file=sys.stderr,flush=True)
+    except BaseException as publication_error:
+        record['publication_error']=type(publication_error).__name__
+        try:
+            os.write(2,b'CP027_DIAGNOSTIC_PUBLICATION_FAILED; original failure retained; cleanup scope DIRECT_CHILD_ONLY; descendants UNVERIFIED\\n')
+        except BaseException:
+            pass  # Publication failure must never replace the execution exception.
     return record
 
 def stop_owned_child(child):
@@ -311,8 +322,11 @@ print('CP027_CONFINEMENT_PROBE_OK')
                 child_failure_diagnostics(phase,child,stdout,stderr,type(error).__name__,cleanup_errors)
             except BaseException as evidence_error:
                 # Child already reconciled. Unknown cleanup cannot be erased by storage failure.
-                print('CP027_FAILURE_EVIDENCE_UNAVAILABLE phase='+phase+' type='+type(evidence_error).__name__+
-                      ' teardown='+str(bool(cleanup_errors)),file=sys.stderr,flush=True)
+                try:
+                    print('CP027_FAILURE_EVIDENCE_UNAVAILABLE phase='+phase+' type='+type(evidence_error).__name__+
+                          ' teardown='+str(child is not None or bool(cleanup_errors)),file=sys.stderr,flush=True)
+                except BaseException:
+                    pass
             raise
         finally:
             cleanup_errors=stop_owned_child(child)
