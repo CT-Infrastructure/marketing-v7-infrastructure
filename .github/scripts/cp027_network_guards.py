@@ -215,7 +215,7 @@ def native_pair(path,digest,optimized=False):
         base=['/usr/bin/python3','-I','-S','-B']+(['-O'] if optimized else [])+[str(path)]
         args=[str(host),str(port),nonces[1],str(fd),str(uid),str(gid),digest]
         isolated=json.loads(_run(['/usr/bin/unshare','--user','--map-current-user','--net','--',*base,'--isolated',*args],10,observations))
-        children.append(isolated);require(isolated=={'kind':'ISOLATED','errno':errno.ENETUNREACH,'fd_absent':True,'uid':uid,'gid':gid,'namespace_different':True,'optimized':optimized},'Exact isolated proof missing')
+        children.append(isolated);isolated_errno=_isolated_errno(isolated,uid,gid,optimized)
         shared_args=[str(host),str(port),nonces[2],str(fd),str(uid),str(gid),digest]
         shared=json.loads(_run([*base,'--host-shared',*shared_args],10,observations));children.append(shared)
         require(shared=={'kind':'HOST_SHARED_REFUSED','payload_executed':False,'fd_absent':True,'optimized':optimized},'Host shared guard missing')
@@ -224,7 +224,7 @@ def native_pair(path,digest,optimized=False):
         require(time.monotonic()-started<=45,'Native pair aggregate bound')
         require(os.stat('/proc/self/ns/net').st_ino==host and os.getuid()==uid and _custody(path,digest,True)==identity,'Native parent subject changed')
         current=pathlib.Path('/usr/bin/unshare').lstat();require((current.st_dev,current.st_ino,current.st_size)==tuple(tool['identity']) and hashlib.sha256(pathlib.Path('/usr/bin/unshare').read_bytes()).hexdigest()==tool['sha256'],'Native primitive changed')
-        result={'scope':scope,'pid':os.getpid(),'start':_ticks(os.getpid()),'net':host,'uid':uid,'gid':gid,'kernel':kernel,'helper_sha256':digest,'helper_identity':identity,'primitive':tool,'optimized':optimized,'isolated_errno':errno.ENETUNREACH,'positive_before_after':True,'no_child_nonce':True,'host_shared_refused':True,'listener_fd_not_inherited':True,'process_observations':observations}
+        result={'scope':scope,'pid':os.getpid(),'start':_ticks(os.getpid()),'net':host,'uid':uid,'gid':gid,'kernel':kernel,'helper_sha256':digest,'helper_identity':identity,'primitive':tool,'optimized':optimized,'isolated_errno':isolated_errno,'positive_before_after':True,'no_child_nonce':True,'host_shared_refused':True,'listener_fd_not_inherited':True,'process_observations':observations}
     finally:
         stop.set()
         try:
@@ -236,6 +236,12 @@ def native_pair(path,digest,optimized=False):
     require(result is not None and len(observations)==2 and all(item['direct_reaped'] and item['wnowait_session_bound'] and item['exit_code']==0 for item in observations),'Native pair incomplete')
     result['finished_monotonic']=time.monotonic();value=_Qualification(_PRIVATE_KEY,result);_QUALIFICATIONS[id(value)]=(value,json.loads(json.dumps(result)))
     return value
+
+def _isolated_errno(record,uid,gid,optimized):
+    require(type(record) is dict and set(record)=={'kind','errno','fd_absent','uid','gid','namespace_different','optimized'},'Exact isolated proof missing')
+    require(type(record['errno']) is int and record['errno'] in (errno.ENETUNREACH,errno.EADDRNOTAVAIL),'Precise native denial missing')
+    require(type(record['uid']) is int and type(record['gid']) is int and record['uid']==uid and record['gid']==gid and record['kind']=='ISOLATED' and record['fd_absent'] is True and record['namespace_different'] is True and type(record['optimized']) is bool and record['optimized'] is optimized,'Exact isolated proof missing')
+    return record['errno']
 
 def _child(mode,args):
     require(len(args)==7,'Fixed child arguments')
@@ -262,9 +268,10 @@ def _child(mode,args):
     with socket.socket(socket.AF_INET6,socket.SOCK_STREAM) as client:
         client.settimeout(2)
         try:client.connect(('::1',port))
-        except OSError as error:require(error.errno==errno.ENETUNREACH,'Precise native denial missing')
+        except OSError as error:
+            require(type(error.errno) is int and error.errno in (errno.ENETUNREACH,errno.EADDRNOTAVAIL),'Precise native denial missing');denial_errno=error.errno
         else:client.sendall(nonce.encode());raise RuntimeError('Isolated child reached fixture peer')
-    return {'kind':'ISOLATED','errno':errno.ENETUNREACH,'fd_absent':True,'uid':uid,'gid':gid,'namespace_different':True,'optimized':bool(sys.flags.optimize)}
+    return {'kind':'ISOLATED','errno':denial_errno,'fd_absent':True,'uid':uid,'gid':gid,'namespace_different':True,'optimized':bool(sys.flags.optimize)}
 if __name__=='__main__':
     try:
         require(len(sys.argv)>=2 and sys.argv[1] in ('--isolated','--host-shared'),'No public qualification/admission CLI')

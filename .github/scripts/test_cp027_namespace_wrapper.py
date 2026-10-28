@@ -358,11 +358,20 @@ class NamespaceGuards(unittest.TestCase):
         args=['1','12345','a'*32,'9','1001','1001','b'*64]
         with mock.patch.dict(module,os=fake_os,socket=fake_socket,sys=fake_sys,_custody=mock.Mock(),_no_privileges=mock.Mock(),observe=mock.Mock(return_value=snapshot)):
             client.connect.side_effect=OSError(errno.ENETUNREACH,'fixture');record=module['_child']('--isolated',args);self.assertEqual(record['errno'],errno.ENETUNREACH);self.assertTrue(record['fd_absent'])
-            for number in (errno.ECONNREFUSED,errno.ETIMEDOUT):
+            client.connect.side_effect=OSError(errno.EADDRNOTAVAIL,'fixture');record=module['_child']('--isolated',args);self.assertEqual(record['errno'],errno.EADDRNOTAVAIL);self.assertTrue(record['namespace_different'])
+            for number in (errno.ECONNREFUSED,errno.ETIMEDOUT,errno.EPERM,errno.EACCES,errno.EAFNOSUPPORT,errno.EBADF):
                 client.connect.side_effect=OSError(number,'fixture')
                 with self.assertRaises(RuntimeError):module['_child']('--isolated',args)
             fake_os.fstat.side_effect=None;fake_os.fstat.return_value=object()
             with self.assertRaisesRegex(RuntimeError,'descriptor inherited'):module['_child']('--isolated',args)
+        for number in (errno.ENETUNREACH,errno.EADDRNOTAVAIL):
+            record={'kind':'ISOLATED','errno':number,'fd_absent':True,'uid':1001,'gid':1001,'namespace_different':True,'optimized':False}
+            self.assertEqual(module['_isolated_errno'](record,1001,1001,False),number)
+            for key,value in [('errno',True),('errno',errno.ECONNREFUSED),('errno',errno.EPERM),('errno',errno.ETIMEDOUT),('errno',None),('errno','99'),('uid',True),('gid',1002),('fd_absent',False),('namespace_different',False),('optimized',0),('kind','FAIL_CLOSED')]:
+                mutated=dict(record);mutated[key]=value
+                with self.assertRaises(RuntimeError):module['_isolated_errno'](mutated,1001,1001,False)
+            for mutated in ({},dict(record,extra=True),dict(record,uid=1002)):
+                with self.assertRaises(RuntimeError):module['_isolated_errno'](mutated,1001,1001,False)
         client.sendall.assert_not_called()
     def test_native_host_shared_actual_guard_refuses_before_socket_or_observation(self):
         import errno
