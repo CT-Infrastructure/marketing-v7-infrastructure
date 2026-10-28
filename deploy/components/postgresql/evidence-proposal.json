@@ -1,0 +1,14 @@
+{
+ "schema": "CP027-component-evidence-proposal-v1",
+ "status": "UNRESOLVED_HOLD",
+ "shared_lock_modified": false,
+ "postgresql": {"release": null, "support_document_sha256": null, "application_compatibility": null, "source_commit": null, "oci_manifest_digest": null, "platform": null, "build_provenance": null, "uid_gid_entrypoint": null, "license_evidence": null},
+ "pgbackrest": {"release": null, "artifact_sha256": null, "signer": null, "dependency_closure": null, "license_evidence": null},
+ "tls_libraries": {"release": null, "artifact_identity": null},
+ "pgvector": {"selected": false, "explicit_need": null},
+ "scanners": {"sbom": "NOT_RUN", "vulnerability_tool_digest": null, "database_digest_timestamp": null, "vulnerability_report": "NOT_RUN", "secret_tool_digest": null, "secret_report": "NOT_RUN"},
+ "runtime": {"status": "NOT_RUN", "exact_candidate_revision": null, "artifact_subject": null, "independent_executor": null, "generator": "NOT_RUN", "sql_tls": "NOT_RUN", "pgbackrest_separate_volume_restore": "NOT_RUN", "consumer_hold": "NOT_RUN"},
+ "owners": {"immutable_artifacts_and_central_adoption": "root artifact-acquisition/lock owner", "scanner_db_sbom": "root security lane", "executor_resource_admission": "root execution owner", "application_compatibility_and_consumer_hold": "selected native application owners", "runtime_receipts": "independent verifier", "exact_head_review_ci_merge": "trusted controller"},
+ "cached_image": "17.11 tag/abbreviated ID explicitly not adopted or inspected",
+ "publication": "Requires actual exact-head independent reviewer, required CI and trusted-controller merge receipts. No production/G02 authority."
+}

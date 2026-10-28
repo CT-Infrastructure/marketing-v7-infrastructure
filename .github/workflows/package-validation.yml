@@ -19,3 +19,15 @@ jobs:
           persist-credentials: false
       - name: Validate package and build DAG
         run: python3 tools/validate_scope.py
+  cp027-mock-guards:
+    name: CP027 mock unit guards (normal and optimized)
+    # Matched Jammy private DEB; CI-only during runner deprecation, original cutoff unchanged.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # existing reviewed pin
+        with:
+          persist-credentials: false
+      - name: Run isolated CP027 mock unit guards
+        shell: bash
+        run: bash .github/scripts/validate-cp027-guards.sh

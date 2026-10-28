@@ -1,0 +1,38 @@
+# INERT: unresolved pin and UID block installation; no Install target.
+[Unit]
+Description=CP027 PostgreSQL engineering held template
+StartLimitIntervalSec=300
+StartLimitBurst=3
+[Container]
+Image=UNRESOLVED_REGISTRY/UNRESOLVED_IMAGE@sha256:UNRESOLVED_DIGEST
+ContainerName=cp027-postgresql
+User=UNRESOLVED_UID:UNRESOLVED_GID
+ReadOnly=true
+ReadOnlyTmpfs=false
+PodmanArgs=--image-volume=ignore
+NoNewPrivileges=true
+DropCapability=all
+Network=none
+Volume=UNRESOLVED_OWNED_DATA:/var/lib/postgresql/data:rw
+Volume=UNRESOLVED_CONFIG:/etc/postgresql:ro
+Volume=UNRESOLVED_PGBACKREST_CONFIG:/etc/pgbackrest:ro
+Volume=UNRESOLVED_OWNED_REPOSITORY:/backup/repository:rw
+Volume=UNRESOLVED_PRIVATE_TLS:/run/secrets:ro
+Tmpfs=/tmp:rw,nosuid,nodev,noexec,size=64m
+Tmpfs=/run/postgresql:rw,nosuid,nodev,noexec,size=16m
+Tmpfs=/run/pgbackrest:rw,nosuid,nodev,noexec,size=16m
+Exec=postgres -D /var/lib/postgresql/data -c config_file=/etc/postgresql/postgresql.conf
+HealthCmd=["pg_isready","-q","-h","/run/postgresql","-p","5432"]
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=30s
+[Service]
+Restart=no
+RestartSec=10
+TimeoutStartSec=180
+TimeoutStopSec=60
+MemoryMax=1536M
+CPUQuota=100%
+TasksMax=128
+RuntimeMaxSec=1800

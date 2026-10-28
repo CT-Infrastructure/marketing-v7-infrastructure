@@ -1,0 +1,17 @@
+[global]
+repo1-type=posix
+repo1-path=/backup/repository
+repo1-retention-full=2
+repo1-cipher-type=aes-256-cbc
+# Cipher passphrase is supplied by private pgBackRest config mounted as secret;
+# this template MUST NOT be invoked until repo1-cipher-pass is supplied there.
+process-max=1
+start-fast=y
+log-level-console=warn
+log-level-file=off
+spool-path=/run/pgbackrest
+lock-path=/run/pgbackrest
+[cp027]
+pg1-path=/var/lib/postgresql/data
+pg1-port=5432
+pg1-socket-path=/run/postgresql
