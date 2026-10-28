@@ -213,6 +213,100 @@ def controlled_bwrap_path(directory):
     package=download_pinned_package(directory)
     return extract_verified_members(package,directory)
 
+# Production wrapper definitions are embedded in the reviewed launcher, never read from env.
+PARENT_WRAPPER = r'''
+import hashlib,json,os,pathlib,stat,subprocess,sys
+
+def require(value,message):
+    if not value: raise RuntimeError(message)
+
+def observation():
+    interfaces=sorted(line.split(':',1)[0].strip() for line in pathlib.Path('/proc/net/dev').read_text().splitlines()[2:])
+    ipv4=pathlib.Path('/proc/net/route').read_text().splitlines()[1:]
+    ipv6=pathlib.Path('/proc/net/ipv6_route').read_text().splitlines()
+    addresses=pathlib.Path('/proc/net/if_inet6').read_text().splitlines()
+    if '/32 host LOCAL' in pathlib.Path('/proc/net/fib_trie').read_text():
+        addresses.append('IPv4_LOCAL_ADDRESS_PRESENT')
+    return {'inode':os.stat('/proc/self/ns/net').st_ino,'interfaces':interfaces,
+            'ipv4':ipv4,'ipv6':ipv6,'addresses':addresses}
+
+def validate_parent(host,current):
+    require(type(host) is int and type(current['inode']) is int and current['inode']!=host,'Parent network is host/unknown')
+    require(current['interfaces']==['lo'] and not current['ipv4'] and not current['ipv6'] and not current['addresses'],
+            'Parent network is not empty')
+
+def validate_argv(argv,binary):
+    require(isinstance(argv,list) and all(isinstance(s,str) and '\x00' not in s for s in argv),'Unsafe argv type')
+    require(argv[0]==binary and argv[1:7]==['--unshare-all','--share-net','--die-with-parent','--new-session','--clearenv','--ro-bind'],
+            'Unsafe namespace prefix')
+    require(argv.count('--share-net')==1 and '--unshare-net' not in argv and '--netns' not in argv and
+            '--userns' not in argv and '--cap-add' not in argv,'Unsafe namespace/capability override')
+    # Whole argv digest is bound by the outer trusted launcher, not a caller flag.
+
+def run():
+    host=int(sys.argv[1]);command=json.loads(sys.argv[2]);expected_command=sys.argv[3]
+    binary=command[0];validate_argv(command,binary)
+    require(hashlib.sha256(json.dumps(command,separators=(',',':')).encode()).hexdigest()==expected_command,'Command identity mismatch')
+    parent=observation();validate_parent(host,parent)
+    path=pathlib.Path(binary);info=path.stat(follow_symlinks=False)
+    require(path.is_absolute() and path.resolve(strict=True)==path and not path.is_symlink() and
+            stat.S_ISREG(info.st_mode) and info.st_uid==os.getuid() and info.st_nlink==1 and
+            stat.S_IMODE(info.st_mode)==0o700,'Unowned private executable')
+    require(hashlib.sha256(path.read_bytes()).hexdigest()=='e318903862396f96de3df57264e0158682b952fd3fb53ac23d876413e7b30f71',
+            'Private executable digest mismatch')
+    # Stream the reviewed program only after replacing fixed inode placeholders.
+    program=sys.stdin.buffer.read(1048577)
+    require(len(program)<=1048576,'Program input exceeds bound')
+    program=program.replace(b'__CP027_PARENT_NET_INODE__',str(parent['inode']).encode()).replace(b'__CP027_HOST_NET_INODE__',str(host).encode())
+    # exec preserves exact owned outer PID/session identity and introduces no orphan waiter.
+    # Input uses a private inherited anonymous file, never env/host namespace handles.
+    import tempfile
+    with tempfile.TemporaryFile() as stream:
+        stream.write(program);stream.seek(0);os.dup2(stream.fileno(),0)
+        validate_parent(host,observation())
+        after=path.stat(follow_symlinks=False)
+        require((after.st_dev,after.st_ino)==(info.st_dev,info.st_ino),'Private executable replaced')
+        os.execve(binary,command,{'PATH':'/usr/bin','HOME':'/home','LANG':'C.UTF-8','PYTHONDONTWRITEBYTECODE':'1'})
+if __name__=='__main__': run()
+'''
+
+def verified_outer_command(inner):
+    primitive=pathlib.Path('/usr/bin/unshare')
+    info=primitive.stat(follow_symlinks=False)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid!=0 or info.st_mode&0o022 or not info.st_mode&0o111:
+        raise RuntimeError('Untrusted fixed unshare primitive')
+    # Fixed distro package/version and binary digest retained in bounded receipt.
+    version=bounded(['/usr/bin/dpkg-query','-W','-f=${db:Status-Status} ${Version}','util-linux'],5,4096).decode('ascii').split()
+    if len(version)!=2 or version[0]!='installed' or not version[1].startswith('2.39.3-'):
+        raise RuntimeError('Unsupported util-linux primitive version')
+    owner=bounded(['/usr/bin/dpkg-query','-S','/usr/bin/unshare'],5,4096).decode('ascii').strip()
+    if owner!='util-linux: /usr/bin/unshare':
+        raise RuntimeError('Primitive package owner mismatch')
+    host=os.stat('/proc/self/ns/net').st_ino
+    command_hash=hashlib.sha256(json.dumps(inner,separators=(',',':')).encode()).hexdigest()
+    before=(info.st_dev,info.st_ino)
+    if primitive.resolve(strict=True)!=primitive:
+        raise RuntimeError('Primitive symlink refused')
+    print(json.dumps({'phase':'empty-parent-primitive','version':version[1],
+                      'sha256':hashlib.sha256(primitive.read_bytes()).hexdigest(),'host_net_inode':host},sort_keys=True))
+    after=primitive.stat(follow_symlinks=False)
+    if (after.st_dev,after.st_ino)!=before:
+        raise RuntimeError('Primitive identity changed')
+    return ['/usr/bin/unshare','--user','--map-current-user','--net','--',
+            '/usr/bin/python3','-I','-S','-B','-c',PARENT_WRAPPER,str(host),json.dumps(inner),command_hash]
+
+NET_ASSERT = r'''
+import os,pathlib
+parent_net=__CP027_PARENT_NET_INODE__
+host_net=__CP027_HOST_NET_INODE__
+if os.stat('/proc/self/ns/net').st_ino!=parent_net or parent_net==host_net:
+    raise SystemExit('Inner network namespace identity mismatch')
+if sorted(line.split(':',1)[0].strip() for line in pathlib.Path('/proc/net/dev').read_text().splitlines()[2:])!=['lo']:
+    raise SystemExit('Inner network interface mismatch')
+if pathlib.Path('/proc/net/route').read_text().splitlines()[1:] or pathlib.Path('/proc/net/ipv6_route').read_text().splitlines() or pathlib.Path('/proc/net/if_inet6').read_text().splitlines() or '/32 host LOCAL' in pathlib.Path('/proc/net/fib_trie').read_text():
+    raise SystemExit('Inner network route/address not empty')
+'''
+
 if os.getuid() == 0:
     raise SystemExit('Unprivileged hosted runner required')
 
@@ -261,13 +355,23 @@ with tempfile.TemporaryDirectory(prefix='cp027-ci-') as temporary:
             raise SystemExit('Component digest mismatch: '+name)
         target = staged / name; target.parent.mkdir(parents=True,exist_ok=True)
         target.write_bytes(content); target.chmod(0o444)
+    # New test definitions are staged from exact reviewed bytes, never unconfined execution.
+    namespace_tests_source=ROOT/'.github/scripts/test_cp027_namespace_wrapper.py'
+    if any(parent.is_symlink() for parent in (namespace_tests_source,*namespace_tests_source.parents)):
+        raise RuntimeError('Namespace test source symlink refused')
+    namespace_tests_bytes=namespace_tests_source.read_bytes()
+    if hashlib.sha256(namespace_tests_bytes).hexdigest()!='dda0cc88af248dba6acd3853c6b591c8168188ee81f364cbfb3dd3ed96b2e56e':
+        raise RuntimeError('Namespace test source changed')
+    namespace_tests=private/'namespace-tests.py'; private_file(namespace_tests,namespace_tests_bytes,0o400)
+    wrapper_source=private/'wrapper-source.sh'
+    private_file(wrapper_source,(ROOT/'.github/scripts/validate-cp027-guards.sh').read_bytes(),0o400)
     runtime = pathlib.Path('/usr/bin/python3').resolve(strict=True)
     stdlib = pathlib.Path('/usr/lib/python' + str(sys.version_info.major) + '.' + str(sys.version_info.minor))
     if not stdlib.is_dir():
         raise SystemExit('Required distro Python runtime unavailable')
     # Bind only the selected Python executable/stdlib and loader libraries, no host tools.
-    base = [str(bwrap),'--unshare-all','--die-with-parent','--new-session','--clearenv',
-            '--ro-bind',str(staged),'/component','--dir','/usr','--dir','/usr/bin','--dir','/usr/lib',
+    base = [str(bwrap),'--unshare-all','--share-net','--die-with-parent','--new-session','--clearenv',
+            '--ro-bind',str(staged),'/component','--ro-bind',str(namespace_tests),'/namespace-tests.py','--ro-bind',str(wrapper_source),'/wrapper-source.sh','--dir','/usr','--dir','/usr/bin','--dir','/usr/lib',
             '--ro-bind',str(runtime),'/usr/bin/python3','--ro-bind',str(stdlib),str(stdlib),
             '--proc','/proc','--dev','/dev','--tmpfs','/tmp','--dir','/home',
             '--setenv','HOME','/home','--setenv','TMPDIR','/tmp','--setenv','LANG','C.UTF-8',
@@ -301,8 +405,8 @@ print('CP027_CONFINEMENT_PROBE_OK')
             raise RuntimeError('Private executable identity changed')
         if hashlib.sha256(bwrap.read_bytes()).hexdigest()!=PAYLOADS['./usr/bin/bwrap'][1]:
             raise RuntimeError('Private executable digest changed')
-        command=['/usr/bin/timeout','--signal=TERM','--kill-after=5s','120s',*base,
-                 '/usr/bin/python3','-I','-B',*(['-O'] if optimized else []),'-']
+        inner=[*base,'/usr/bin/python3','-I','-B',*(['-O'] if optimized else []),'-']
+        command=['/usr/bin/timeout','--signal=TERM','--kill-after=5s','120s',*verified_outer_command(inner)]
         outpath=private/(phase+'.stdout'); errpath=private/(phase+'.stderr')
         child=None
         try:
@@ -310,7 +414,7 @@ print('CP027_CONFINEMENT_PROBE_OK')
             with outpath.open('wb') as out,errpath.open('wb') as err:
                 child=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=out,stderr=err,
                                        env=SAFE_ENV,preexec_fn=limits,start_new_session=True)
-                child.communicate(source.encode(),timeout=130)
+                child.communicate((NET_ASSERT+source).encode(),timeout=130)
             if outpath.stat().st_size>1048576 or errpath.stat().st_size>1048576:
                 raise RuntimeError('Bounded confinement output exceeded')
             if child.returncode!=0:
@@ -340,6 +444,15 @@ print('CP027_CONFINEMENT_PROBE_OK')
     if probe_stdout.strip()!=b'CP027_CONFINEMENT_PROBE_OK':
         child_failure_diagnostics('confinement-probe-result',None,probe_stdout,probe_stderr,'InvalidProbeResult',[],lifecycle=probe_lifecycle)
         raise RuntimeError('Private binary confinement probe invalid')
+    namespace_harness = "import runpy; runpy.run_path('/namespace-tests.py',run_name='__main__')\n"
+    for namespace_optimized in (False,True):
+        namespace_stdout,namespace_stderr,namespace_lifecycle=confined(namespace_harness,namespace_optimized,
+                phase='namespace-units-optimized' if namespace_optimized else 'namespace-units-normal')
+        namespace_records=[json.loads(line.removeprefix('CP027_NAMESPACE_RESULT=')) for line in namespace_stdout.decode().splitlines()
+                           if line.startswith('CP027_NAMESPACE_RESULT=')]
+        if len(namespace_records)!=1 or namespace_records[0]!={'run':6,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}:
+            child_failure_diagnostics('namespace-units-result',None,namespace_stdout,namespace_stderr,'RejectedNamespaceResult',[],lifecycle=namespace_lifecycle)
+            raise RuntimeError('Namespace wrapper unit result rejected')
     for optimized in (False,True):
         stdout_bytes,stderr_bytes,guard_lifecycle=confined(HARNESS,optimized,phase="guards-optimized" if optimized else "guards-normal")
         lines=stdout_bytes.decode('utf-8',errors='strict').splitlines()
