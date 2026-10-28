@@ -80,9 +80,9 @@ class NamespaceGuards(unittest.TestCase):
         self.assertEqual(record['uid_map'],'UNAVAILABLE');self.assertEqual(record['policy']['max_user_namespaces'],'UNAVAILABLE')
         self.assertTrue(all(value=='UNAVAILABLE' for value in record['process'].values()))
     def test_diagnostics_read_bound_and_fixed_path(self):
-        scope=self.diagnostics();fake=scope['os'];fake.O_RDONLY=0;fake.O_CLOEXEC=1;fake.O_NOFOLLOW=2;fake.open.return_value=7;fake.read.return_value=b'x'*4097
+        scope=self.diagnostics();fake=scope['os'];fake.O_RDONLY=0;fake.O_CLOEXEC=1;fake.O_NOFOLLOW=2;fake.open.return_value=7;fake.read.side_effect=[b'x'*4096,b'x']
         with self.assertRaises(RuntimeError):scope['namespace_fact_read']('/proc/self/status')
-        fake.read.assert_called_once_with(7,4097);fake.close.assert_called_once_with(7)
+        self.assertEqual(fake.read.call_args_list,[mock.call(7,4096),mock.call(7,1)]);fake.close.assert_called_once_with(7)
         fake.open.reset_mock()
         with self.assertRaises(RuntimeError):scope['namespace_fact_read']('/private/account')
         fake.open.assert_not_called()

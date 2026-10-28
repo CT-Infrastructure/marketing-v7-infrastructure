@@ -277,9 +277,13 @@ def namespace_fact_read(path):
     if path not in allowed: raise RuntimeError('Diagnostic path refused')
     fd=os.open(path,os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW)
     try:
-        data=os.read(fd,4097)
+        data=bytearray()
+        while len(data)<=4096:
+            block=os.read(fd,min(4096,4097-len(data)))
+            if not block:break
+            data.extend(block)
         if len(data)>4096: raise RuntimeError('Diagnostic read bound')
-        return data
+        return bytes(data)
     finally: os.close(fd)
 
 def namespace_numeric_rows(data):
@@ -441,7 +445,7 @@ with tempfile.TemporaryDirectory(prefix='cp027-ci-') as temporary:
     if any(parent.is_symlink() for parent in (namespace_tests_source,*namespace_tests_source.parents)):
         raise RuntimeError('Namespace test source symlink refused')
     namespace_tests_bytes=namespace_tests_source.read_bytes()
-    if hashlib.sha256(namespace_tests_bytes).hexdigest()!='4c3dfa82cf1d95e0ff274e509da7abce48b024339a95bae04b2c30acb4d81c87':
+    if hashlib.sha256(namespace_tests_bytes).hexdigest()!='d2810361e944c843b4e3f6d878bd3a5143dd6a53c99cae6aa4fcd2a9e0dbe609':
         raise RuntimeError('Namespace test source changed')
     namespace_tests=private/'namespace-tests.py'; private_file(namespace_tests,namespace_tests_bytes,0o400)
     wrapper_source=private/'wrapper-source.sh'
