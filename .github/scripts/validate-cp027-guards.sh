@@ -96,6 +96,42 @@ def parse_parent_content(stderr):
         return output
     except BaseException:return rejected
 
+def parse_ipv6_properties(stderr):
+    unknown={'parse':'UNKNOWN'};overflow={'parse':'OVERFLOW'};prefix='CP027_IPV6_PROPERTIES_V1='
+    if type(stderr) is not bytes:return unknown
+    if len(stderr)>4096:return overflow
+    try:
+        text=stderr.decode('utf-8')
+        if any(ord(c)<32 and c not in '\t\n\r' for c in text) or '\x7f' in text:return unknown
+        lines=[line for line in text.splitlines() if line.startswith(prefix)]
+        if not lines:return {'parse':'ABSENT'}
+        if len(lines)!=1:return unknown
+        if len((lines[0]+'\n').encode('utf-8'))>2048:return overflow
+        def unique(pairs):
+            result={}
+            for key,value in pairs:
+                if key in result:raise ValueError('Duplicate diagnostic key')
+                result[key]=value
+            return result
+        record=json.loads(lines[0][len(prefix):],object_pairs_hook=unique)
+        if type(record) is not dict or type(record.get('version')) is not int or record['version']!=1:return unknown
+        if record.get('status') in ('UNKNOWN','OVERFLOW'):
+            if set(record)!=set(('version','status')):return unknown
+            return {'parse':record['status']}
+        if set(record)!=set(('version','status','row_count','rows')) or record['status']!='OBSERVED_PROPERTIES_ONLY':return unknown
+        if type(record['row_count']) is not int or not 1<=record['row_count']<=4 or type(record['rows']) is not list or len(record['rows'])!=record['row_count']:return unknown
+        booleans=('destination_zero','source_zero','next_hop_zero','device_is_lo','metric_is_max_u32')
+        prefixes=('destination_prefix_length','source_prefix_length');keys=set(booleans+prefixes+('flag_bits',))
+        for row in record['rows']:
+            if type(row) is not dict or set(row)!=keys:return unknown
+            if any(type(row[k]) is not bool for k in booleans):return unknown
+            if any(type(row[k]) is not int or not 0<=row[k]<=128 for k in prefixes):return unknown
+            if type(row['flag_bits']) is not list or len(row['flag_bits'])!=32 or any(type(x) is not bool for x in row['flag_bits']):return unknown
+        output={'parse':'OBSERVED_PROPERTIES_ONLY','version':1,'row_count':record['row_count'],'rows':record['rows']}
+        if len(json.dumps(output,separators=(',',':')).encode('ascii'))>2048:return overflow
+        return output
+    except BaseException:return unknown
+
 def child_failure_diagnostics(phase,child,stdout,stderr,cause,cleanup_errors,lifecycle=None):
     """Bounded private retention first; only fixed diagnostic vocabulary is public."""
     started = lifecycle['child_started'] if lifecycle is not None else child is not None
@@ -121,6 +157,8 @@ def child_failure_diagnostics(phase,child,stdout,stderr,cause,cleanup_errors,lif
         record['closed_diagnostic']={'origin':'UNKNOWN','exception':'UNKNOWN','guard':'UNKNOWN','parse':'NO_MATCH'}
     try:record['parent_content']=parse_parent_content(stderr)
     except BaseException:record['parent_content']={'parse':'REJECTED'}
+    try:record['ipv6_properties']=parse_ipv6_properties(stderr)
+    except BaseException:record['ipv6_properties']={'parse':'UNKNOWN'}
     record['private_evidence']='UNAVAILABLE'
     try:
         directory=pathlib.Path(tempfile.mkdtemp(prefix='cp027-failure-'))
@@ -314,6 +352,43 @@ def observation():
     return {'inode':os.stat('/proc/self/ns/net').st_ino,'interfaces':interfaces,
             'ipv4':ipv4,'ipv6':ipv6,'addresses':addresses}
 
+def ipv6_route_properties(rows):
+    # Positional shape facts only, not route reachability or kernel-flag semantics.
+    unknown={'version':1,'status':'UNKNOWN'};overflow={'version':1,'status':'OVERFLOW'}
+    try:
+        if type(rows) is not list or not rows:return unknown
+        if len(rows)>4:return overflow
+        encoded=[]
+        for row in rows:
+            if type(row) is not str:return unknown
+            raw=row.encode('ascii')
+            if len(raw)>512:return overflow
+            encoded.append(raw)
+        if sum(map(len,encoded))>4096:return overflow
+        result=[];widths=(32,2,32,2,32,8,8,8,8)
+        for row in rows:
+            fields=row.split()
+            if len(fields)!=10:return unknown
+            if any(len(fields[i])!=width or any(c not in '0123456789abcdefABCDEF' for c in fields[i]) for i,width in enumerate(widths)):return unknown
+            if not 1<=len(fields[9])<=15 or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:-@' for c in fields[9]):return unknown
+            dp=int(fields[1],16);sp=int(fields[3],16)
+            if dp>128 or sp>128:return unknown
+            flags=int(fields[8],16)
+            result.append({'destination_zero':set(fields[0])=={'0'},'destination_prefix_length':dp,
+                           'source_zero':set(fields[2])=={'0'},'source_prefix_length':sp,
+                           'next_hop_zero':set(fields[4])=={'0'},'device_is_lo':fields[9]=='lo',
+                           'flag_bits':[bool(flags&(1<<i)) for i in range(32)],'metric_is_max_u32':int(fields[5],16)==4294967295})
+        return {'version':1,'status':'OBSERVED_PROPERTIES_ONLY','row_count':len(result),'rows':result}
+    except BaseException:return unknown
+
+def ipv6_route_marker(rows):
+    try:
+        record=ipv6_route_properties(rows)
+        payload=b'CP027_IPV6_PROPERTIES_V1='+json.dumps(record,separators=(',',':'),sort_keys=True).encode('ascii')+b'\n'
+        if len(payload)>2048:return b'CP027_IPV6_PROPERTIES_V1={"version":1,"status":"OVERFLOW"}\n'
+        return payload
+    except BaseException:return b'CP027_IPV6_PROPERTIES_V1={"version":1,"status":"UNKNOWN"}\n'
+
 def emit_parent_content(current):
     # Already acquired observation only; never serialize rows or names.
     try:
@@ -330,7 +405,10 @@ def emit_parent_content(current):
                 'fib_ipv4_local_sentinel_present':fib,'non_fib_address_rows_count':min(nonfib,65535),
                 'count_capped':any(x>65535 for x in counts+[nonfib])}
         payload=b'CP027_PARENT_CONTENT_V1='+json.dumps(record,separators=(',',':'),sort_keys=True).encode('ascii')+b'\n'
-        if len(payload)<=768:os.write(2,payload)  # One best-effort write; partial output is not proof.
+        if len(payload)<=768:
+            extra=ipv6_route_marker(current['ipv6']) if current['ipv6'] else b''
+            os.write(2,payload+extra)  # Same single best-effort write; each marker independently bounded.
+
     except BaseException:pass
 
 def validate_parent(host,current):
@@ -551,7 +629,7 @@ with tempfile.TemporaryDirectory(prefix='cp027-ci-') as temporary:
     if any(parent.is_symlink() for parent in (namespace_tests_source,*namespace_tests_source.parents)):
         raise RuntimeError('Namespace test source symlink refused')
     namespace_tests_bytes=namespace_tests_source.read_bytes()
-    if hashlib.sha256(namespace_tests_bytes).hexdigest()!='a8b212fba7d543b24614f5f68cefa7706ea45bdf12996af0377286a6167abf0c':
+    if hashlib.sha256(namespace_tests_bytes).hexdigest()!='c873639149ff203308a2be3dcb51b5a6225992720db5e7d85e7fffc3ac41012b':
         raise RuntimeError('Namespace test source changed')
     namespace_tests=private/'namespace-tests.py'; private_file(namespace_tests,namespace_tests_bytes,0o400)
     wrapper_source=private/'wrapper-source.sh'
@@ -641,7 +719,7 @@ print('CP027_CONFINEMENT_PROBE_OK')
                 phase='namespace-units-optimized' if namespace_optimized else 'namespace-units-normal')
         namespace_records=[json.loads(line.removeprefix('CP027_NAMESPACE_RESULT=')) for line in namespace_stdout.decode().splitlines()
                            if line.startswith('CP027_NAMESPACE_RESULT=')]
-        if len(namespace_records)!=1 or namespace_records[0]!={'run':27,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}:
+        if len(namespace_records)!=1 or namespace_records[0]!={'run':34,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}:
             child_failure_diagnostics('namespace-units-result',None,namespace_stdout,namespace_stderr,'RejectedNamespaceResult',[],lifecycle=namespace_lifecycle)
             raise RuntimeError('Namespace wrapper unit result rejected')
     for optimized in (False,True):

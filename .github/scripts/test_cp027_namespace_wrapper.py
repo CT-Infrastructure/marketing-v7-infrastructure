@@ -253,9 +253,73 @@ class NamespaceGuards(unittest.TestCase):
         with mock.patch.object(self,'closed_scope',return_value=scope):self.test_closed_actual_confined_failure_cleanup_survives_diagnostic_failures()
         parser.assert_called_once()
 
+    def ipv6_row(self,**changes):
+        fields=['0'*32,'00','0'*32,'00','0'*32,'ffffffff','00000000','00000000','00000200','lo']
+        for key,value in changes.items():fields[int(key.removeprefix('f'))]=value
+        return ' '.join(fields)
+    def ipv6_parser(self):
+        node=next(n for n in self.tree.body if isinstance(n,ast.FunctionDef) and n.name=='parse_ipv6_properties')
+        scope={'json':json};exec(compile(ast.Module(body=[node],type_ignores=[]),'actual-ipv6-properties-parser','exec'),scope)
+        return scope['parse_ipv6_properties']
+    def ipv6_failure_marker(self,rows):
+        current=self.parent();current['ipv6']=rows;writes=[]
+        with mock.patch.object(self.ns['os'],'write',side_effect=lambda fd,data:writes.append(data) or len(data)):
+            with self.assertRaisesRegex(RuntimeError,'Parent network is not empty'):self.ns['validate_parent'](1,current)
+        self.assertEqual(len(writes),1);self.assertLessEqual(len(writes[0]),2816)
+        self.assertEqual(self.parent_parser()(writes[0])['parse'],'VALIDATED_DIAGNOSTIC_ONLY')
+        return writes[0]
+    def test_ipv6_properties_builtin_looking_and_usable_shapes_still_rejected(self):
+        parse=self.ipv6_parser()
+        for row,zero,lo,bit in [(self.ipv6_row(),True,True,9),(self.ipv6_row(f0='20010db8'+'0'*24,f1='40',f4='20010db8'+'0'*23+'1',f8='00000001',f9='PRIVATE_IF'),False,False,0)]:
+            with self.subTest(zero=zero):
+                marker=self.ipv6_failure_marker([row]);record=parse(marker)
+                self.assertEqual(record['parse'],'OBSERVED_PROPERTIES_ONLY');self.assertEqual(record['row_count'],1)
+                self.assertEqual(record['rows'][0]['destination_zero'],zero);self.assertEqual(record['rows'][0]['device_is_lo'],lo);self.assertTrue(record['rows'][0]['flag_bits'][bit])
+                self.assertNotIn(b'20010db8',marker);self.assertNotIn(b'PRIVATE_IF',marker);self.assertNotIn(b'00000200',marker)
+    def test_ipv6_properties_closed_privacy_and_multiple_rows(self):
+        marker=self.ipv6_failure_marker([self.ipv6_row(f2='abcd'*8,f3='80',f9='SECRETDEV'),self.ipv6_row()]);record=self.ipv6_parser()(marker)
+        self.assertEqual(record['row_count'],2);self.assertEqual(record['rows'][0]['source_prefix_length'],128);self.assertFalse(record['rows'][0]['source_zero'])
+        for raw in (b'abcd',b'SECRETDEV',b'ffff',b'/proc',b'account',b'env='):self.assertNotIn(raw,marker)
+        self.assertLessEqual(len(json.dumps(record,separators=(',',':')).encode()),2048)
+    def test_ipv6_properties_malformed_rows_and_bounds_are_unknown_or_overflow(self):
+        properties=self.ns['ipv6_route_properties']
+        for rows in ([],['PRIVATE'],[self.ipv6_row(f0='0'*31)],[self.ipv6_row(f8='zzzzzzzz')],[self.ipv6_row(f1='81')],[self.ipv6_row(f3='ff')],[self.ipv6_row(f9='BAD/DEVICE')],[self.ipv6_row()+' EXTRA'],[object()],[self.ipv6_row(f9='NONASCII'+chr(233))]):
+            with self.subTest(rows_type=type(rows).__name__):self.assertEqual(properties(rows),{'version':1,'status':'UNKNOWN'})
+        for rows in ([self.ipv6_row()]*5,['x'*513]):self.assertEqual(properties(rows),{'version':1,'status':'OVERFLOW'})
+        self.assertEqual(self.ipv6_parser()(self.ipv6_failure_marker(['PRIVATE'])),{'parse':'UNKNOWN'})
+        self.assertEqual(self.ipv6_parser()(self.ipv6_failure_marker([self.ipv6_row()]*5)),{'parse':'OVERFLOW'})
+    def test_ipv6_properties_marker_write_partial_and_json_failure_preserve_guard(self):
+        current=self.parent();current['ipv6']=[self.ipv6_row()]
+        for result in (1,OSError('PRIVATE')):
+            context=mock.patch.object(self.ns['os'],'write',return_value=result) if type(result) is int else mock.patch.object(self.ns['os'],'write',side_effect=result)
+            with context as write,self.assertRaisesRegex(RuntimeError,'Parent network is not empty'):self.ns['validate_parent'](1,current)
+            write.assert_called_once()
+        with mock.patch.object(json,'dumps',side_effect=RuntimeError('PRIVATE')),self.assertRaisesRegex(RuntimeError,'Parent network is not empty'):self.ns['validate_parent'](1,current)
+        with mock.patch.object(json,'dumps',return_value='x'*2049):self.assertIn(b'OVERFLOW',self.ns['ipv6_route_marker']([self.ipv6_row()]))
+    def test_ipv6_properties_parser_strict_schema_duplicates_types_and_limits(self):
+        marker=self.ipv6_failure_marker([self.ipv6_row()]);parse=self.ipv6_parser();line=next(x for x in marker.splitlines() if x.startswith(b'CP027_IPV6_PROPERTIES_V1='));body=json.loads(line.split(b'=',1)[1])
+        invalid=[line+b'\n'+line,b'CP027_IPV6_PROPERTIES_V1={PRIVATE',b'CP027_IPV6_PROPERTIES_V1={"version":1,'+line.split(b'=',1)[1][1:],b'\xff',b'\x1b'+line]
+        for key,value in [('version',True),('version',2),('row_count',True),('row_count',0),('row_count',5),('rows',[]),('status','REJECT_ROUTE_SAFE'),('extra','PRIVATE')]:
+            changed=dict(body);changed[key]=value;invalid.append(b'CP027_IPV6_PROPERTIES_V1='+json.dumps(changed).encode())
+        for raw in invalid:self.assertEqual(parse(raw),{'parse':'UNKNOWN'})
+        self.assertEqual(parse(b'x'*4097),{'parse':'OVERFLOW'});self.assertEqual(parse(b'CP027_IPV6_PROPERTIES_V1='+b'x'*2049),{'parse':'OVERFLOW'})
+        self.assertEqual(parse(b'CP027_IPV6_PROPERTIES_V1={"version":1,"status":"OVERFLOW"}'),{'parse':'OVERFLOW'})
+        self.assertEqual(parse(b'no marker PRIVATE'),{'parse':'ABSENT'})
+    def test_ipv6_properties_parser_rejects_row_fields_bitstrings_and_prefix_types(self):
+        parse=self.ipv6_parser();body=json.loads(self.ns['ipv6_route_marker']([self.ipv6_row()]).split(b'=',1)[1])
+        for key,value in [('flag_bits',[False]*31),('flag_bits',[0]*32),('flag_bits','PRIVATE'),('destination_prefix_length',True),('source_prefix_length',129),('device_is_lo',1),('source_zero','PRIVATE'),('extra','PRIVATE')]:
+            changed=json.loads(json.dumps(body));changed['rows'][0][key]=value
+            self.assertEqual(parse(b'CP027_IPV6_PROPERTIES_V1='+json.dumps(changed).encode()),{'parse':'UNKNOWN'})
+        changed=json.loads(json.dumps(body));changed['rows'][0].pop('next_hop_zero')
+        self.assertEqual(parse(b'CP027_IPV6_PROPERTIES_V1='+json.dumps(changed).encode()),{'parse':'UNKNOWN'})
+    def test_ipv6_properties_parser_failure_preserves_actual_confined_cleanup(self):
+        scope=self.closed_scope();parser=mock.Mock(side_effect=RuntimeError('PRIVATE'));scope['parse_ipv6_properties']=parser
+        with mock.patch.object(self,'closed_scope',return_value=scope):self.test_closed_actual_confined_failure_cleanup_survives_diagnostic_failures()
+        parser.assert_called_once()
+
 if __name__=='__main__':
     result=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(NamespaceGuards))
     record={'run':result.testsRun,'errors':len(result.errors),'failures':len(result.failures),'skips':len(result.skipped),
             'expected_failures':len(result.expectedFailures),'unexpected_successes':len(result.unexpectedSuccesses)}
     print('CP027_NAMESPACE_RESULT='+json.dumps(record,sort_keys=True),flush=True)
-    if record!={'run':27,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}: raise SystemExit(1)
+    if record!={'run':34,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}: raise SystemExit(1)
