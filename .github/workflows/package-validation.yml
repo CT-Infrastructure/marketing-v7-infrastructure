@@ -21,8 +21,8 @@ jobs:
         run: python3 tools/validate_scope.py
   cp027-mock-guards:
     name: CP027 mock unit guards (normal and optimized)
-    # Fixed Noble private DEB bootstrap; existing dependencies and namespaces fail closed.
-    runs-on: ubuntu-24.04
+    # Matched Jammy private DEB; CI-only during runner deprecation, original cutoff unchanged.
+    runs-on: ubuntu-22.04
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # existing reviewed pin

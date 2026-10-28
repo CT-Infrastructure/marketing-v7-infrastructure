@@ -1,5 +1,5 @@
 """Synthetic namespace guards. Entry is permitted only inside the verified sandbox."""
-import ast,json,os,pathlib,stat,subprocess,unittest
+import ast,json,os,pathlib,stat,subprocess,unittest,shlex
 from unittest import mock
 
 class NamespaceGuards(unittest.TestCase):
@@ -89,7 +89,7 @@ class NamespaceGuards(unittest.TestCase):
     def test_diagnostics_failure_never_replaces_launch_failure(self):
         scope=self.diagnostics();scope['os'].write.side_effect=OSError('PRIVATE_SECRET')
         primitive=next(n for n in self.tree.body if isinstance(n,ast.FunctionDef) and n.name=='verified_outer_command')
-        scope.update(pathlib=pathlib,stat=stat,PARENT_WRAPPER='unit-wrapper',bounded=mock.Mock(side_effect=[b'installed 2.39.3-unit',b'util-linux: /usr/bin/unshare']))
+        scope.update(pathlib=pathlib,stat=stat,PARENT_WRAPPER='unit-wrapper',bounded=mock.Mock(side_effect=[b'installed 2.37.2-unit',b'util-linux: /usr/bin/unshare']))
         exec(compile(ast.Module(body=[primitive],type_ignores=[]),'actual-primitive-builder','exec'),scope)
         info=type('Info',(),{'st_mode':0o100755,'st_uid':0,'st_dev':2,'st_ino':3})()
         scope['os'].stat.return_value=info
@@ -100,9 +100,60 @@ class NamespaceGuards(unittest.TestCase):
         with mock.patch.dict(scope,hosted_namespace_facts=mock.Mock(return_value=b'{}')),mock.patch('builtins.print',side_effect=OSError('PRIVATE_SECRET')):
             scope['emit_hosted_namespace_facts']()
 
+    def transport(self):
+        names={'verify_runner_target','verify_existing_dependencies','download_pinned_package','verified_outer_command'}
+        scope={'os':mock.Mock(),'pathlib':pathlib,'stat':stat,'shlex':shlex,'json':json,'hashlib':self.ns['hashlib'],
+               'bounded':mock.Mock(),'private_file':mock.Mock(),'emit_hosted_namespace_facts':mock.Mock(),'PARENT_WRAPPER':'fixture-wrapper'}
+        for node in self.tree.body:
+            if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id in ('PACKAGE_URL','PACKAGE_SHA') for t in node.targets):
+                exec(compile(ast.Module(body=[node],type_ignores=[]),'actual-transport-constant','exec'),scope)
+        exec(compile(ast.Module(body=[n for n in self.tree.body if isinstance(n,ast.FunctionDef) and n.name in names],type_ignores=[]),'actual-transport-functions','exec'),scope)
+        return scope
+    def test_matched_target_positive_and_unsupported_negative(self):
+        scope=self.transport();scope['os'].environ={'GITHUB_ACTIONS':'true','RUNNER_ENVIRONMENT':'github-hosted'}
+        scope['bounded'].return_value=b'amd64'
+        with mock.patch.object(pathlib.Path,'read_text',return_value='ID=ubuntu\nVERSION_ID="22.04"\n'):
+            scope['verify_runner_target']()
+        for text in ('ID=ubuntu\nVERSION_ID="24.04"\n','ID=debian\nVERSION_ID="22.04"\n','ID=ubuntu\nID=ubuntu\nVERSION_ID="22.04"\n'):
+            with self.subTest(text=text),mock.patch.object(pathlib.Path,'read_text',return_value=text),self.assertRaises(RuntimeError):scope['verify_runner_target']()
+        scope['os'].environ={}
+        with mock.patch.object(pathlib.Path,'read_text') as read,self.assertRaisesRegex(RuntimeError,'Owned GitHub-hosted ephemeral job required'):scope['verify_runner_target']()
+        read.assert_not_called()
+    def test_matched_dependency_minima_and_malformed_controls(self):
+        scope=self.transport();scope['bounded'].side_effect=[b'installed 2.35',b'',b'installed 1:2.44',b'',b'installed 3.3',b'']
+        scope['verify_existing_dependencies']()
+        self.assertIn(mock.call(['/usr/bin/dpkg','--compare-versions','2.35','ge','2.34'],5,1024),scope['bounded'].call_args_list)
+        for value in (b'not-installed 2.35',b'installed',b'installed 2.35 extra'):
+            scope['bounded'].side_effect=None;scope['bounded'].return_value=value
+            with self.subTest(value=value),self.assertRaises(RuntimeError):scope['verify_existing_dependencies']()
+    def test_matched_package_length_digest_and_http_controls(self):
+        scope=self.transport()
+        self.assertEqual(scope['PACKAGE_SHA'],'706763714e5d19fc7ab2572a6418506e3a4a5d5960e99309707b58117e6b40cb')
+        self.assertTrue(scope['PACKAGE_URL'].endswith('/bubblewrap_0.6.1-1ubuntu0.3_amd64.deb'))
+        for value in (b'\n200',b'x'*46314+b'\n200',b'x'*46314+b'\n302'):
+            scope['bounded'].return_value=value
+            with self.subTest(size=len(value)),self.assertRaises(RuntimeError):scope['download_pinned_package'](pathlib.Path('/private-fixture'))
+        scope['private_file'].assert_not_called()
+        args,seconds,maximum=scope['bounded'].call_args.args
+        self.assertEqual(args[:2],['/usr/bin/curl','-q']);self.assertEqual((seconds,maximum),(45,46319))
+    def test_matched_primitive_positive_and_version_negative(self):
+        scope=self.transport();info=type('Info',(),{'st_mode':0o100755,'st_uid':0,'st_dev':2,'st_ino':3})();scope['os'].stat.return_value=info
+        with mock.patch.object(pathlib.Path,'stat',return_value=info),mock.patch.object(pathlib.Path,'resolve',return_value=pathlib.Path('/usr/bin/unshare')),mock.patch.object(pathlib.Path,'read_bytes',return_value=b'fixture-primitive'),mock.patch('builtins.print'):
+            scope['bounded'].side_effect=[b'installed 2.37.2-fixture',b'util-linux: /usr/bin/unshare']
+            command=scope['verified_outer_command'](['fixture-inner']);self.assertEqual(command[:5],['/usr/bin/unshare','--user','--map-current-user','--net','--'])
+            for version in (b'installed 2.39.3-fixture',b'not-installed 2.37.2-fixture',b'installed bad'):
+                scope['bounded'].side_effect=[version]
+                with self.subTest(version=version),self.assertRaises(RuntimeError):scope['verified_outer_command'](['fixture-inner'])
+    def test_matched_primitive_identity_mutation_refused(self):
+        scope=self.transport();info=type('Info',(),{'st_mode':0o100755,'st_uid':0,'st_dev':2,'st_ino':3})();changed=type('Info',(),{'st_dev':2,'st_ino':4})();scope['os'].stat.return_value=info
+        scope['bounded'].side_effect=[b'installed 2.37.2-fixture',b'util-linux: /usr/bin/unshare']
+        with mock.patch.object(pathlib.Path,'stat',side_effect=[info,changed]),mock.patch.object(pathlib.Path,'resolve',return_value=pathlib.Path('/usr/bin/unshare')),mock.patch.object(pathlib.Path,'read_bytes',return_value=b'fixture-primitive'),mock.patch('builtins.print'):
+            with self.assertRaisesRegex(RuntimeError,'Primitive identity changed'):scope['verified_outer_command'](['fixture-inner'])
+        scope['emit_hosted_namespace_facts'].assert_not_called()
+
 if __name__=='__main__':
     result=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(NamespaceGuards))
     record={'run':result.testsRun,'errors':len(result.errors),'failures':len(result.failures),'skips':len(result.skipped),
             'expected_failures':len(result.expectedFailures),'unexpected_successes':len(result.unexpectedSuccesses)}
     print('CP027_NAMESPACE_RESULT='+json.dumps(record,sort_keys=True),flush=True)
-    if record!={'run':10,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}: raise SystemExit(1)
+    if record!={'run':15,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}: raise SystemExit(1)

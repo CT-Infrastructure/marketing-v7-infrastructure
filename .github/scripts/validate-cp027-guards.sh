@@ -1,5 +1,6 @@
 #!/usr/bin/bash
-# MOCK guards only. Fixed authenticated private DEB acquisition; never installation.
+# MOCK guards only. Matched Jammy CI tool; never application adoption/installation.
+# Ubuntu22 runner is deprecating: CI-only under original campaign cutoff1793222933.6339688.
 set -euo pipefail
 exec /usr/bin/python3 -I - "$PWD" <<'CP027_LAUNCHER'
 import hashlib, json, os, pathlib, resource, stat, subprocess, sys, tempfile
@@ -10,11 +11,11 @@ COMPONENT = ROOT / 'deploy/components/postgresql'
 EXPECTED = {"component.json":"57087a86d5ac2bebad6f8bd7b50f29fc35c42f41ed115c70f6390846f1a86e68","config/pg_hba.conf.in":"62e14bffe07efc780c19b5541eff29b138bebaee9b49c785d91fc9cdc808d520","config/pgbackrest.conf.in":"4188fee9221186ee0f5feaae8b5a30a5568f0455be4c638df08fa643107f1e9d","config/postgresql.conf":"c189ef1d4776f1c584fd4823ba41bec005476e782346bceb5c7c27b520938581","evidence-proposal.json":"b53a6059c7a365f792de3bfbb53a6e4be3eb9b33b711195f7ff1b7da777998fe","postgresql.container.in":"4ec7177c8f2686ffe840844fe25e936d64c69ebb049755c540cc352cd801f6cb","runbook.md":"59dbebe3ed6d42273a5ace1e627fe4c469d7e9270b3c3ada6a6ff1b26d6ef343","scripts/backup_restore.py":"fbdd153cc5c4e6c978e5ba1ffa08c939921e158efce00679751b5ba41611b718","security.md":"ee64ef30f3427fe3fba94c28e5edf8ae3e997702f20a87d0d24f1ba7034e187b","sql/001-ledger.sql":"8081a0c1cef17df0e058d1a60fb600bea4ca595ed5ee4aaafba8115acfb9256d","sql/bootstrap.sql":"5ca7d9a6d50cc1b6dc143cee21b94059318b5125c0b2dc0221286d67dab0b41b","tests/integration.py":"e60b8c64f386fa9189e53322d9232a50136524f60fa426d0c631691fad9a1d11","tests/PLAN.md":"166dc38a11c510511a7664dcaf1ffe7aed6c64121e99eaa097980f0532f19d13","tests/test_driver_guards.py":"141ff9f70c77c3580a089cf8478ecb4b9f4df20f106c7858eda8df585e463a68"}
 import io, selectors, shlex, tarfile, time
 
-PACKAGE_URL = 'https://security.ubuntu.com/ubuntu/pool/main/b/bubblewrap/bubblewrap_0.9.0-1ubuntu0.3_amd64.deb'
-PACKAGE_SHA = '2461f1beee9cb04c8942739fe1a2b37e7b7c2a3d518f0779dc75f9245baa3094'
-MEMBERS = [{"name":".","type":"5","size":0,"link":""},{"name":"./usr","type":"5","size":0,"link":""},{"name":"./usr/bin","type":"5","size":0,"link":""},{"name":"./usr/bin/bwrap","type":"0","size":72160,"link":""},{"name":"./usr/lib","type":"5","size":0,"link":""},{"name":"./usr/lib/sysctl.d","type":"5","size":0,"link":""},{"name":"./usr/lib/sysctl.d/50-bubblewrap.conf","type":"0","size":403,"link":""},{"name":"./usr/share","type":"5","size":0,"link":""},{"name":"./usr/share/bash-completion","type":"5","size":0,"link":""},{"name":"./usr/share/bash-completion/completions","type":"5","size":0,"link":""},{"name":"./usr/share/bash-completion/completions/bwrap","type":"0","size":1159,"link":""},{"name":"./usr/share/bug","type":"5","size":0,"link":""},{"name":"./usr/share/bug/bubblewrap","type":"0","size":319,"link":""},{"name":"./usr/share/doc","type":"5","size":0,"link":""},{"name":"./usr/share/doc/bubblewrap","type":"5","size":0,"link":""},{"name":"./usr/share/doc/bubblewrap/README.Debian.gz","type":"0","size":2391,"link":""},{"name":"./usr/share/doc/bubblewrap/README.md.gz","type":"0","size":4692,"link":""},{"name":"./usr/share/doc/bubblewrap/changelog.Debian.gz","type":"0","size":3409,"link":""},{"name":"./usr/share/doc/bubblewrap/copyright","type":"0","size":3388,"link":""},{"name":"./usr/share/doc/bubblewrap/examples","type":"5","size":0,"link":""},{"name":"./usr/share/doc/bubblewrap/examples/bubblewrap-shell.sh","type":"0","size":1204,"link":""},{"name":"./usr/share/doc/bubblewrap/examples/flatpak-run.sh","type":"0","size":2642,"link":""},{"name":"./usr/share/doc/bubblewrap/examples/flatpak.bpf","type":"0","size":744,"link":""},{"name":"./usr/share/doc/bubblewrap/examples/userns-block-fd.py","type":"0","size":969,"link":""},{"name":"./usr/share/man","type":"5","size":0,"link":""},{"name":"./usr/share/man/man1","type":"5","size":0,"link":""},{"name":"./usr/share/man/man1/bwrap.1.gz","type":"0","size":5338,"link":""},{"name":"./usr/share/zsh","type":"5","size":0,"link":""},{"name":"./usr/share/zsh/vendor-completions","type":"5","size":0,"link":""},{"name":"./usr/share/zsh/vendor-completions/_bwrap","type":"0","size":7396,"link":""}]
-PAYLOADS = {'./usr/bin/bwrap':(72160,'e318903862396f96de3df57264e0158682b952fd3fb53ac23d876413e7b30f71','bwrap',0o700),
-            './usr/share/doc/bubblewrap/copyright':(3388,'229a402fddba5c81005950f28de162359383cba731f5b859b8f82a03c338bf01','COPYRIGHT',0o400)}
+PACKAGE_URL = 'https://security.ubuntu.com/ubuntu/pool/main/b/bubblewrap/bubblewrap_0.6.1-1ubuntu0.3_amd64.deb'
+PACKAGE_SHA = '706763714e5d19fc7ab2572a6418506e3a4a5d5960e99309707b58117e6b40cb'
+MEMBERS = [{"name":".","type":"5","size":0,"link":""},{"name":"./usr","type":"5","size":0,"link":""},{"name":"./usr/bin","type":"5","size":0,"link":""},{"name":"./usr/bin/bwrap","type":"0","size":72160,"link":""},{"name":"./usr/lib","type":"5","size":0,"link":""},{"name":"./usr/lib/sysctl.d","type":"5","size":0,"link":""},{"name":"./usr/lib/sysctl.d/50-bubblewrap.conf","type":"0","size":403,"link":""},{"name":"./usr/share","type":"5","size":0,"link":""},{"name":"./usr/share/bash-completion","type":"5","size":0,"link":""},{"name":"./usr/share/bash-completion/completions","type":"5","size":0,"link":""},{"name":"./usr/share/bash-completion/completions/bwrap","type":"0","size":1075,"link":""},{"name":"./usr/share/bug","type":"5","size":0,"link":""},{"name":"./usr/share/bug/bubblewrap","type":"0","size":319,"link":""},{"name":"./usr/share/doc","type":"5","size":0,"link":""},{"name":"./usr/share/doc/bubblewrap","type":"5","size":0,"link":""},{"name":"./usr/share/doc/bubblewrap/README.Debian.gz","type":"0","size":2391,"link":""},{"name":"./usr/share/doc/bubblewrap/README.md.gz","type":"0","size":3674,"link":""},{"name":"./usr/share/doc/bubblewrap/changelog.Debian.gz","type":"0","size":2484,"link":""},{"name":"./usr/share/doc/bubblewrap/copyright","type":"0","size":2878,"link":""},{"name":"./usr/share/doc/bubblewrap/examples","type":"5","size":0,"link":""},{"name":"./usr/share/doc/bubblewrap/examples/bubblewrap-shell.sh","type":"0","size":1204,"link":""},{"name":"./usr/share/doc/bubblewrap/examples/flatpak-run.sh","type":"0","size":2642,"link":""},{"name":"./usr/share/doc/bubblewrap/examples/flatpak.bpf","type":"0","size":744,"link":""},{"name":"./usr/share/doc/bubblewrap/examples/userns-block-fd.py","type":"0","size":1012,"link":""},{"name":"./usr/share/man","type":"5","size":0,"link":""},{"name":"./usr/share/man/man1","type":"5","size":0,"link":""},{"name":"./usr/share/man/man1/bwrap.1.gz","type":"0","size":4156,"link":""},{"name":"./usr/share/zsh","type":"5","size":0,"link":""},{"name":"./usr/share/zsh/vendor-completions","type":"5","size":0,"link":""},{"name":"./usr/share/zsh/vendor-completions/_bwrap","type":"0","size":6205,"link":""}]
+PAYLOADS = {'./usr/bin/bwrap':(72160,'bf6cf3d4456665f5d80c14eb79a76e0ce87b39a0883e614a161658b4ec33492c','bwrap',0o700),
+            './usr/share/doc/bubblewrap/copyright':(2878,'9b242e22dd0a8b04f14dcee7fd8f9befcb3322ee31fffd865166997f5108a901','COPYRIGHT',0o400)}
 SAFE_ENV = {'PATH':'/usr/bin','LANG':'C.UTF-8','HOME':'/nonexistent'}
 
 def child_failure_diagnostics(phase,child,stdout,stderr,cause,cleanup_errors,lifecycle=None):
@@ -128,13 +129,13 @@ def verify_runner_target():
         parsed=shlex.split(value)
         if len(parsed)!=1: raise RuntimeError('Malformed OS value')
         fields[key]=parsed[0]
-    if fields.get('ID')!='ubuntu' or fields.get('VERSION_ID')!='24.04':
+    if fields.get('ID')!='ubuntu' or fields.get('VERSION_ID')!='22.04':
         raise RuntimeError('Unsupported OS')
     if bounded(['/usr/bin/dpkg','--print-architecture'],5,1024).strip()!=b'amd64':
         raise RuntimeError('Unsupported architecture')
 
 def verify_existing_dependencies():
-    for package,minimum in (('libc6','2.38'),('libcap2','1:2.10'),('libselinux1','3.1~')):
+    for package,minimum in (('libc6','2.34'),('libcap2','1:2.10'),('libselinux1','3.1~')):
         value=bounded(['/usr/bin/dpkg-query','-W','-f=${db:Status-Status} ${Version}',package],5,4096).decode('ascii')
         fields=value.split()
         if len(fields)!=2 or fields[0]!='installed' or not fields[1] or any(c.isspace() for c in fields[1]):
@@ -159,11 +160,11 @@ def download_pinned_package(directory):
     # -q MUST be curl's first option. No redirects/retries/config/proxy credentials.
     response=bounded(['/usr/bin/curl','-q','--silent','--show-error','--fail','--proto','=https',
                       '--proxy','','--noproxy','*','--max-redirs','0','--retry','0',
-                      '--connect-timeout','10','--max-time','45','--max-filesize','50437',
-                      '--write-out','\n%{http_code}',PACKAGE_URL],45,50441)
+                      '--connect-timeout','10','--max-time','45','--max-filesize','46315',
+                      '--write-out','\n%{http_code}',PACKAGE_URL],45,46319)
     if not response.endswith(b'\n200'): raise RuntimeError('Only direct HTTP200 accepted')
     body=response[:-4]
-    if len(body)!=50436 or hashlib.sha256(body).hexdigest()!=PACKAGE_SHA:
+    if len(body)!=46314 or hashlib.sha256(body).hexdigest()!=PACKAGE_SHA:
         raise RuntimeError('Pinned package length/digest mismatch')
     path=directory/'bubblewrap.deb'; private_file(path,body,0o400)
     return path
@@ -174,7 +175,7 @@ def extract_verified_members(package,directory):
     if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid() or info.st_nlink!=1:
         raise RuntimeError('Unsafe package object')
     body=package.read_bytes()
-    if len(body)!=50436 or hashlib.sha256(body).hexdigest()!=PACKAGE_SHA:
+    if len(body)!=46314 or hashlib.sha256(body).hexdigest()!=PACKAGE_SHA:
         raise RuntimeError('Package changed before decoding')
     tarbytes=bounded(['/usr/bin/dpkg-deb','--fsys-tarfile',str(package)],15,1048576)
     after=package.stat(follow_symlinks=False)
@@ -252,7 +253,7 @@ def run():
     require(path.is_absolute() and path.resolve(strict=True)==path and not path.is_symlink() and
             stat.S_ISREG(info.st_mode) and info.st_uid==os.getuid() and info.st_nlink==1 and
             stat.S_IMODE(info.st_mode)==0o700,'Unowned private executable')
-    require(hashlib.sha256(path.read_bytes()).hexdigest()=='e318903862396f96de3df57264e0158682b952fd3fb53ac23d876413e7b30f71',
+    require(hashlib.sha256(path.read_bytes()).hexdigest()=='bf6cf3d4456665f5d80c14eb79a76e0ce87b39a0883e614a161658b4ec33492c',
             'Private executable digest mismatch')
     # Stream the reviewed program only after replacing fixed inode placeholders.
     program=sys.stdin.buffer.read(1048577)
@@ -361,7 +362,7 @@ def verified_outer_command(inner):
         raise RuntimeError('Untrusted fixed unshare primitive')
     # Fixed distro package/version and binary digest retained in bounded receipt.
     version=bounded(['/usr/bin/dpkg-query','-W','-f=${db:Status-Status} ${Version}','util-linux'],5,4096).decode('ascii').split()
-    if len(version)!=2 or version[0]!='installed' or not version[1].startswith('2.39.3-'):
+    if len(version)!=2 or version[0]!='installed' or not version[1].startswith('2.37.2-'):
         raise RuntimeError('Unsupported util-linux primitive version')
     owner=bounded(['/usr/bin/dpkg-query','-S','/usr/bin/unshare'],5,4096).decode('ascii').strip()
     if owner!='util-linux: /usr/bin/unshare':
@@ -445,7 +446,7 @@ with tempfile.TemporaryDirectory(prefix='cp027-ci-') as temporary:
     if any(parent.is_symlink() for parent in (namespace_tests_source,*namespace_tests_source.parents)):
         raise RuntimeError('Namespace test source symlink refused')
     namespace_tests_bytes=namespace_tests_source.read_bytes()
-    if hashlib.sha256(namespace_tests_bytes).hexdigest()!='d2810361e944c843b4e3f6d878bd3a5143dd6a53c99cae6aa4fcd2a9e0dbe609':
+    if hashlib.sha256(namespace_tests_bytes).hexdigest()!='5c9c126bf3b6c524e3d7ef9801e4610e4eb191e767a0ce480bf31e99f15a3d65':
         raise RuntimeError('Namespace test source changed')
     namespace_tests=private/'namespace-tests.py'; private_file(namespace_tests,namespace_tests_bytes,0o400)
     wrapper_source=private/'wrapper-source.sh'
@@ -535,7 +536,7 @@ print('CP027_CONFINEMENT_PROBE_OK')
                 phase='namespace-units-optimized' if namespace_optimized else 'namespace-units-normal')
         namespace_records=[json.loads(line.removeprefix('CP027_NAMESPACE_RESULT=')) for line in namespace_stdout.decode().splitlines()
                            if line.startswith('CP027_NAMESPACE_RESULT=')]
-        if len(namespace_records)!=1 or namespace_records[0]!={'run':10,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}:
+        if len(namespace_records)!=1 or namespace_records[0]!={'run':15,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}:
             child_failure_diagnostics('namespace-units-result',None,namespace_stdout,namespace_stderr,'RejectedNamespaceResult',[],lifecycle=namespace_lifecycle)
             raise RuntimeError('Namespace wrapper unit result rejected')
     for optimized in (False,True):
