@@ -53,9 +53,56 @@ class NamespaceGuards(unittest.TestCase):
         scope['limits']()
         self.assertIn(mock.call(fake.RLIMIT_AS,(256*1024*1024,256*1024*1024)),fake.setrlimit.call_args_list)
 
+    def diagnostics(self):
+        names={'namespace_fact_read','namespace_numeric_rows','hosted_namespace_facts','emit_hosted_namespace_facts'}
+        scope={'os':mock.Mock(),'hashlib':self.ns['hashlib'],'json':json}
+        exec(compile(ast.Module(body=[n for n in self.tree.body if isinstance(n,ast.FunctionDef) and n.name in names],type_ignores=[]),'actual-diagnostic-functions','exec'),scope)
+        scope['os'].geteuid.return_value=1001;scope['os'].getegid.return_value=1001
+        return scope
+    def test_diagnostics_closed_fields_redact_private_labels(self):
+        scope=self.diagnostics()
+        data={'/proc/self/status':b'Name: PRIVATE_ACCOUNT\nCapEff: 0000000000000000\nNoNewPrivs: 0\nSeccomp: 2\n',
+              '/proc/self/uid_map':b'0 1001 1\n','/proc/self/gid_map':b'0 1001 1\n','/proc/self/attr/current':b'PRIVATE_PROFILE /private/account (enforce)\n'}
+        with mock.patch.dict(scope,namespace_fact_read=lambda path:data.get(path,b'1\n')):
+            raw=scope['hosted_namespace_facts']();record=json.loads(raw)
+        self.assertLessEqual(len(raw),8192);self.assertNotIn(b'PRIVATE',raw);self.assertNotIn(b'/private/account',raw)
+        self.assertEqual(record['uid_map'],[[0,1001,1]]);self.assertEqual(record['lsm']['classification'],'ENFORCE_LABEL_PRESENT')
+        self.assertEqual(set(record['process']),{'CapInh','CapPrm','CapEff','CapBnd','CapAmb','NoNewPrivs','Seccomp'})
+        self.assertEqual(record['underlying_denial'],'UNKNOWN')
+        with mock.patch.dict(scope,namespace_fact_read=lambda path:data.get(path,b'1\n')),mock.patch.object(json,'dumps',return_value='x'*8193):
+            with self.assertRaises(RuntimeError):scope['hosted_namespace_facts']()
+    def test_diagnostics_malformed_numeric_values_fail_closed(self):
+        scope=self.diagnostics()
+        for raw in (b'private 2 1',b'1 2 0',b'1 2 4294967296',b'1 2 1\n'*9,b'1 2 1 SECRET'):
+            with self.subTest(raw=raw),self.assertRaises(RuntimeError):scope['namespace_numeric_rows'](raw)
+        with mock.patch.dict(scope,namespace_fact_read=lambda path:b'PRIVATE_SECRET'):
+            record=json.loads(scope['hosted_namespace_facts']())
+        self.assertEqual(record['uid_map'],'UNAVAILABLE');self.assertEqual(record['policy']['max_user_namespaces'],'UNAVAILABLE')
+        self.assertTrue(all(value=='UNAVAILABLE' for value in record['process'].values()))
+    def test_diagnostics_read_bound_and_fixed_path(self):
+        scope=self.diagnostics();fake=scope['os'];fake.O_RDONLY=0;fake.O_CLOEXEC=1;fake.O_NOFOLLOW=2;fake.open.return_value=7;fake.read.return_value=b'x'*4097
+        with self.assertRaises(RuntimeError):scope['namespace_fact_read']('/proc/self/status')
+        fake.read.assert_called_once_with(7,4097);fake.close.assert_called_once_with(7)
+        fake.open.reset_mock()
+        with self.assertRaises(RuntimeError):scope['namespace_fact_read']('/private/account')
+        fake.open.assert_not_called()
+    def test_diagnostics_failure_never_replaces_launch_failure(self):
+        scope=self.diagnostics();scope['os'].write.side_effect=OSError('PRIVATE_SECRET')
+        primitive=next(n for n in self.tree.body if isinstance(n,ast.FunctionDef) and n.name=='verified_outer_command')
+        scope.update(pathlib=pathlib,stat=stat,PARENT_WRAPPER='unit-wrapper',bounded=mock.Mock(side_effect=[b'installed 2.39.3-unit',b'util-linux: /usr/bin/unshare']))
+        exec(compile(ast.Module(body=[primitive],type_ignores=[]),'actual-primitive-builder','exec'),scope)
+        info=type('Info',(),{'st_mode':0o100755,'st_uid':0,'st_dev':2,'st_ino':3})()
+        scope['os'].stat.return_value=info
+        with mock.patch.dict(scope,hosted_namespace_facts=mock.Mock(side_effect=RuntimeError('PRIVATE_SECRET'))),mock.patch.object(pathlib.Path,'stat',return_value=info),mock.patch.object(pathlib.Path,'resolve',return_value=pathlib.Path('/usr/bin/unshare')),mock.patch.object(pathlib.Path,'read_bytes',return_value=b'unit-primitive'),mock.patch('builtins.print'):
+            command=scope['verified_outer_command'](['unit-inner'])
+        self.assertEqual(command[:5],['/usr/bin/unshare','--user','--map-current-user','--net','--'])
+        scope['os'].write.assert_called_once_with(2,b'CP027_HOSTED_FACTS_UNAVAILABLE; original launch unchanged\n')
+        with mock.patch.dict(scope,hosted_namespace_facts=mock.Mock(return_value=b'{}')),mock.patch('builtins.print',side_effect=OSError('PRIVATE_SECRET')):
+            scope['emit_hosted_namespace_facts']()
+
 if __name__=='__main__':
     result=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(NamespaceGuards))
     record={'run':result.testsRun,'errors':len(result.errors),'failures':len(result.failures),'skips':len(result.skipped),
             'expected_failures':len(result.expectedFailures),'unexpected_successes':len(result.unexpectedSuccesses)}
     print('CP027_NAMESPACE_RESULT='+json.dumps(record,sort_keys=True),flush=True)
-    if record!={'run':6,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}: raise SystemExit(1)
+    if record!={'run':10,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}: raise SystemExit(1)

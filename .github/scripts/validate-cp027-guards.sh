@@ -270,6 +270,86 @@ def run():
 if __name__=='__main__': run()
 '''
 
+def namespace_fact_read(path):
+    allowed=('/proc/self/status','/proc/self/uid_map','/proc/self/gid_map','/proc/self/attr/current',
+             '/proc/sys/kernel/unprivileged_userns_clone','/proc/sys/kernel/apparmor_restrict_unprivileged_userns',
+             '/proc/sys/user/max_user_namespaces')
+    if path not in allowed: raise RuntimeError('Diagnostic path refused')
+    fd=os.open(path,os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW)
+    try:
+        data=os.read(fd,4097)
+        if len(data)>4096: raise RuntimeError('Diagnostic read bound')
+        return data
+    finally: os.close(fd)
+
+def namespace_numeric_rows(data):
+    rows=[]
+    for line in data.decode('ascii').splitlines():
+        fields=line.split()
+        if len(rows)>=8 or len(fields)!=3 or any(not x.isascii() or not x.isdecimal() or len(x)>10 for x in fields):
+            raise RuntimeError('Diagnostic mapping malformed')
+        values=[int(x) for x in fields]
+        if any(x>4294967295 for x in values) or values[2]==0: raise RuntimeError('Diagnostic mapping range')
+        rows.append(values)
+    return rows
+
+def hosted_namespace_facts():
+    record={'phase':'hosted-namespace-facts','scope':'READ_ONLY_DIAGNOSTIC_NO_AUTHORITY',
+            'underlying_denial':'UNKNOWN','docker':'OMITTED_TRANSPORT_SCOPE_NOT_ADMITTED'}
+    for key,fn in (('effective_uid',os.geteuid),('effective_gid',os.getegid)):
+        try:
+            value=fn()
+            if type(value) is not int or not 0<=value<=4294967295:raise RuntimeError('Diagnostic identity range')
+            record[key]=value
+        except BaseException:record[key]='UNAVAILABLE'
+    for key in ('uid_map','gid_map'):
+        try:record[key]=namespace_numeric_rows(namespace_fact_read('/proc/self/'+key))
+        except BaseException:record[key]='UNAVAILABLE'
+    fields=('CapInh','CapPrm','CapEff','CapBnd','CapAmb','NoNewPrivs','Seccomp')
+    record['process']={key:'UNAVAILABLE' for key in fields}
+    try:
+        found={}
+        for line in namespace_fact_read('/proc/self/status').decode('ascii').splitlines():
+            key,separator,value=line.partition(':')
+            if key not in fields:continue
+            value=value.strip()
+            if key in found or not separator:raise RuntimeError('Diagnostic status duplicate')
+            if key.startswith('Cap'):
+                if len(value)!=16 or any(c not in '0123456789abcdefABCDEF' for c in value):raise RuntimeError('Diagnostic capabilities malformed')
+                found[key]=value.lower()
+            else:
+                if value not in (('0','1') if key=='NoNewPrivs' else ('0','1','2')):raise RuntimeError('Diagnostic status range')
+                found[key]=int(value)
+        record['process'].update(found)
+    except BaseException:pass
+    policies={'unprivileged_userns_clone':'/proc/sys/kernel/unprivileged_userns_clone',
+              'apparmor_restrict_unprivileged_userns':'/proc/sys/kernel/apparmor_restrict_unprivileged_userns',
+              'max_user_namespaces':'/proc/sys/user/max_user_namespaces'}
+    record['policy']={}
+    for key,path in policies.items():
+        try:
+            text=namespace_fact_read(path).decode('ascii').strip()
+            if not text.isascii() or not text.isdecimal() or len(text)>20 or int(text)>18446744073709551615:raise RuntimeError('Diagnostic policy malformed')
+            if key!='max_user_namespaces' and int(text) not in (0,1):raise RuntimeError('Diagnostic policy boolean')
+            record['policy'][key]=int(text)
+        except BaseException:record['policy'][key]='UNAVAILABLE'
+    record['lsm']={'classification':'UNAVAILABLE'}
+    try:
+        raw=namespace_fact_read('/proc/self/attr/current')
+        classification='UNCONFINED_LABEL' if raw in (b'unconfined',b'unconfined\n') else ('ENFORCE_LABEL_PRESENT' if raw.endswith((b' (enforce)',b' (enforce)\n')) else 'OTHER_LABEL')
+        record['lsm']={'classification':classification,'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()}
+    except BaseException:pass
+    encoded=json.dumps(record,sort_keys=True,separators=(',',':')).encode('ascii')
+    if len(encoded)>8192:raise RuntimeError('Diagnostic JSON bound')
+    return encoded
+
+def emit_hosted_namespace_facts():
+    # This observational path never grants target/capability authority or masks launch errors.
+    try:print('CP027_HOSTED_FACTS='+hosted_namespace_facts().decode('ascii'),flush=True)
+    except BaseException:
+        try:os.write(2,b'CP027_HOSTED_FACTS_UNAVAILABLE; original launch unchanged\n')
+        except BaseException:pass
+
 def verified_outer_command(inner):
     primitive=pathlib.Path('/usr/bin/unshare')
     info=primitive.stat(follow_symlinks=False)
@@ -292,6 +372,7 @@ def verified_outer_command(inner):
     after=primitive.stat(follow_symlinks=False)
     if (after.st_dev,after.st_ino)!=before:
         raise RuntimeError('Primitive identity changed')
+    emit_hosted_namespace_facts()
     return ['/usr/bin/unshare','--user','--map-current-user','--net','--',
             '/usr/bin/python3','-I','-S','-B','-c',PARENT_WRAPPER,str(host),json.dumps(inner),command_hash]
 
@@ -360,7 +441,7 @@ with tempfile.TemporaryDirectory(prefix='cp027-ci-') as temporary:
     if any(parent.is_symlink() for parent in (namespace_tests_source,*namespace_tests_source.parents)):
         raise RuntimeError('Namespace test source symlink refused')
     namespace_tests_bytes=namespace_tests_source.read_bytes()
-    if hashlib.sha256(namespace_tests_bytes).hexdigest()!='87956a65f112aff2de3e57d13173e4ce25407dc9715085e78e8dcb89b98aa7b2':
+    if hashlib.sha256(namespace_tests_bytes).hexdigest()!='4c3dfa82cf1d95e0ff274e509da7abce48b024339a95bae04b2c30acb4d81c87':
         raise RuntimeError('Namespace test source changed')
     namespace_tests=private/'namespace-tests.py'; private_file(namespace_tests,namespace_tests_bytes,0o400)
     wrapper_source=private/'wrapper-source.sh'
@@ -450,7 +531,7 @@ print('CP027_CONFINEMENT_PROBE_OK')
                 phase='namespace-units-optimized' if namespace_optimized else 'namespace-units-normal')
         namespace_records=[json.loads(line.removeprefix('CP027_NAMESPACE_RESULT=')) for line in namespace_stdout.decode().splitlines()
                            if line.startswith('CP027_NAMESPACE_RESULT=')]
-        if len(namespace_records)!=1 or namespace_records[0]!={'run':6,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}:
+        if len(namespace_records)!=1 or namespace_records[0]!={'run':10,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}:
             child_failure_diagnostics('namespace-units-result',None,namespace_stdout,namespace_stderr,'RejectedNamespaceResult',[],lifecycle=namespace_lifecycle)
             raise RuntimeError('Namespace wrapper unit result rejected')
     for optimized in (False,True):
