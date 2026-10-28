@@ -666,7 +666,7 @@ with tempfile.TemporaryDirectory(prefix='cp027-ci-') as temporary:
     if any(parent.is_symlink() for parent in (namespace_tests_source,*namespace_tests_source.parents)):
         raise RuntimeError('Namespace test source symlink refused')
     namespace_tests_bytes=namespace_tests_source.read_bytes()
-    if hashlib.sha256(namespace_tests_bytes).hexdigest()!='3fa2d5af390c8056aee8eed926164c1e9ebe072745550929c0a9f3dde9e867d1':
+    if hashlib.sha256(namespace_tests_bytes).hexdigest()!='a33f1f4384ae4610c2fb3481d65644f9828491f43e995a417506d1187e82399c':
         raise RuntimeError('Namespace test source changed')
     namespace_tests=private/'namespace-tests.py'; private_file(namespace_tests,namespace_tests_bytes,0o400)
     network_source=ROOT/'.github/scripts/cp027_network_guards.py'
