@@ -17,6 +17,51 @@ PAYLOADS = {'./usr/bin/bwrap':(72160,'e318903862396f96de3df57264e0158682b952fd3f
             './usr/share/doc/bubblewrap/copyright':(3388,'229a402fddba5c81005950f28de162359383cba731f5b859b8f82a03c338bf01','COPYRIGHT',0o400)}
 SAFE_ENV = {'PATH':'/usr/bin','LANG':'C.UTF-8','HOME':'/nonexistent'}
 
+def child_failure_diagnostics(phase,child,stdout,stderr,cause,cleanup_errors):
+    """Bounded private retention first; only fixed diagnostic vocabulary is public."""
+    record={'phase':phase,'exit_code':getattr(child,'returncode',None),
+            'signal':-child.returncode if child is not None and child.returncode is not None and child.returncode<0 else None,
+            'cause':cause,'cleanup_errors':cleanup_errors,'supervisor_teardown_required':bool(cleanup_errors),
+            'stdout_sha256':hashlib.sha256(stdout).hexdigest(),'stderr_sha256':hashlib.sha256(stderr).hexdigest(),
+            'stdout_bytes':len(stdout),'stderr_bytes':len(stderr)}
+    # No raw exception/environment/argv/archive contents in public output.
+    vocabulary=('Operation not permitted','Permission denied','No such file or directory',
+                'Creating new namespace failed','Failed to make','bwrap:','Read-only file system',
+                'No space left on device','Cannot allocate memory','Resource temporarily unavailable',
+                'unshare','mount','bind','execvp','user namespace','AppArmor')
+    decoded=stderr[:8192].decode('utf-8',errors='replace')
+    record['stderr_allowlisted_terms']=[term for term in vocabulary if term in decoded]
+    record['private_evidence']='UNAVAILABLE'
+    try:
+        directory=pathlib.Path(tempfile.mkdtemp(prefix='cp027-failure-'))
+        directory.chmod(0o700)
+        for name,content in (('stdout',stdout[:1048576]),('stderr',stderr[:1048576])):
+            private_file(directory/name,content,0o600)
+        private_file(directory/'receipt.json',json.dumps(record,sort_keys=True).encode(),0o600)
+        record['private_evidence']=str(directory)
+    except BaseException as error:
+        record['evidence_write_error']=type(error).__name__
+    print('CP027_FAILURE='+json.dumps(record,sort_keys=True),file=sys.stderr,flush=True)
+    return record
+
+def stop_owned_child(child):
+    errors=[]
+    if child is None: return errors
+    try:
+        if child.poll() is None:
+            try: child.terminate()
+            except ProcessLookupError: pass
+            except BaseException as error: errors.append('terminate:'+type(error).__name__)
+        try: child.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            try: child.kill()
+            except BaseException as error: errors.append('kill:'+type(error).__name__)
+            try: child.wait(timeout=3)
+            except BaseException as error: errors.append('reap:'+type(error).__name__)
+    except BaseException as error: errors.append('state:'+type(error).__name__)
+    return errors
+
+
 def bounded(argv, seconds, maximum):
     child = None
     selector = selectors.DefaultSelector()
@@ -41,20 +86,22 @@ def bounded(argv, seconds, maximum):
         if code != 0:
             raise RuntimeError('Owned bootstrap child failed: '+str(code))
         return bytes(outputs[1])
+    except BaseException as error:
+        # Cleanup ALWAYS precedes fallible diagnostic persistence/publication.
+        cleanup_errors=stop_owned_child(child)
+        child_failure_diagnostics('bootstrap-'+pathlib.Path(argv[0]).name,child,
+                                  bytes(outputs[1][:1048576]),bytes(outputs[2][:1048576]),
+                                  type(error).__name__,cleanup_errors)
+        raise
     finally:
+        cleanup_errors=stop_owned_child(child)
         try:
-            if child is not None:
-                if child.poll() is None:
-                    try: child.terminate()
-                    except ProcessLookupError: pass
-                try: child.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    child.kill(); child.wait(timeout=3)
-        finally:
             selector.close()
+        finally:
             if child is not None:
                 for pipe in (child.stdout,child.stderr):
                     if pipe is not None: pipe.close()
+        if cleanup_errors: raise RuntimeError('Owned child cleanup uncertain; supervisor teardown required')
 
 def verify_runner_target():
     # This bootstrap is scoped to owned ephemeral GitHub jobs, never local hosts.
@@ -235,7 +282,7 @@ interfaces={line.split(':',1)[0].strip() for line in pathlib.Path('/proc/net/dev
 if interfaces != {'lo'}: raise SystemExit('Unexpected network interfaces')
 print('CP027_CONFINEMENT_PROBE_OK')
 '''
-    def confined(source,optimized=False):
+    def confined(source,optimized=False,phase="unspecified"):
         identity=bwrap.stat(follow_symlinks=False)
         if not stat.S_ISREG(identity.st_mode) or identity.st_uid!=os.getuid() or identity.st_nlink!=1 or stat.S_IMODE(identity.st_mode)!=0o700:
             raise RuntimeError('Private executable identity changed')
@@ -243,9 +290,10 @@ print('CP027_CONFINEMENT_PROBE_OK')
             raise RuntimeError('Private executable digest changed')
         command=['/usr/bin/timeout','--signal=TERM','--kill-after=5s','120s',*base,
                  '/usr/bin/python3','-I','-B',*(['-O'] if optimized else []),'-']
-        outpath=private/'bounded.stdout'; errpath=private/'bounded.stderr'
+        outpath=private/(phase+'.stdout'); errpath=private/(phase+'.stderr')
         child=None
         try:
+            private_file(outpath,b'',0o600); private_file(errpath,b'',0o600)
             with outpath.open('wb') as out,errpath.open('wb') as err:
                 child=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=out,stderr=err,
                                        env=SAFE_ENV,preexec_fn=limits,start_new_session=True)
@@ -255,28 +303,37 @@ print('CP027_CONFINEMENT_PROBE_OK')
             if child.returncode!=0:
                 raise RuntimeError('Private verified binary confinement failed; no fallback')
             return outpath.read_bytes(),errpath.read_bytes()
+        except BaseException as error:
+            cleanup_errors=stop_owned_child(child)
+            try:
+                stdout=outpath.open('rb').read(1048576) if outpath.exists() else b''
+                stderr=errpath.open('rb').read(1048576) if errpath.exists() else b''
+                child_failure_diagnostics(phase,child,stdout,stderr,type(error).__name__,cleanup_errors)
+            except BaseException as evidence_error:
+                # Child already reconciled. Unknown cleanup cannot be erased by storage failure.
+                print('CP027_FAILURE_EVIDENCE_UNAVAILABLE phase='+phase+' type='+type(evidence_error).__name__+
+                      ' teardown='+str(bool(cleanup_errors)),file=sys.stderr,flush=True)
+            raise
         finally:
-            if child is not None:
-                if child.poll() is None:
-                    try: child.terminate()
-                    except ProcessLookupError: pass
-                try: child.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    child.kill(); child.wait(timeout=3)
+            cleanup_errors=stop_owned_child(child)
             if child is not None and child.stdin is not None: child.stdin.close()
-    probe_stdout,_=confined(probe)
+            if cleanup_errors: raise RuntimeError('Owned child cleanup uncertain; supervisor teardown required')
+    probe_stdout,probe_stderr=confined(probe,phase="confinement-probe")
     if probe_stdout.strip()!=b'CP027_CONFINEMENT_PROBE_OK':
+        child_failure_diagnostics('confinement-probe-result',None,probe_stdout,probe_stderr,'InvalidProbeResult',[])
         raise RuntimeError('Private binary confinement probe invalid')
     for optimized in (False,True):
-        stdout_bytes,stderr_bytes=confined(HARNESS,optimized)
+        stdout_bytes,stderr_bytes=confined(HARNESS,optimized,phase="guards-optimized" if optimized else "guards-normal")
         lines=stdout_bytes.decode('utf-8',errors='strict').splitlines()
         records=[json.loads(line.removeprefix('CP027_RESULT=')) for line in lines if line.startswith('CP027_RESULT=')]
         if len(records) != 1:
+            child_failure_diagnostics('guards-result',None,stdout_bytes,stderr_bytes,'MissingGuardResult',[])
             raise SystemExit('Isolated mock execution result missing; no fallback')
         record=records[0]
         if not (record.get('scope')=='MOCK_UNIT_ONLY' and record.get('run')==27 and record.get('expected')==27
                 and record.get('successful') is True and record.get('optimized')==int(optimized)
                 and all(record.get(k)==0 for k in ('errors','failures','skips','unexpected_successes','expected_failures'))):
+            child_failure_diagnostics('guards-result',None,stdout_bytes,stderr_bytes,'RejectedGuardResult',[])
             raise SystemExit('Complete unittest result rejected')
         print(json.dumps({'scope':'MOCK_UNIT_ONLY','result':record,
                           'stdout_sha256':hashlib.sha256(stdout_bytes).hexdigest(),
