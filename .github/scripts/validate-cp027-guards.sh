@@ -11,6 +11,7 @@ COMPONENT = ROOT / 'deploy/components/postgresql'
 EXPECTED = {"component.json":"57087a86d5ac2bebad6f8bd7b50f29fc35c42f41ed115c70f6390846f1a86e68","config/pg_hba.conf.in":"62e14bffe07efc780c19b5541eff29b138bebaee9b49c785d91fc9cdc808d520","config/pgbackrest.conf.in":"4188fee9221186ee0f5feaae8b5a30a5568f0455be4c638df08fa643107f1e9d","config/postgresql.conf":"c189ef1d4776f1c584fd4823ba41bec005476e782346bceb5c7c27b520938581","evidence-proposal.json":"b53a6059c7a365f792de3bfbb53a6e4be3eb9b33b711195f7ff1b7da777998fe","postgresql.container.in":"4ec7177c8f2686ffe840844fe25e936d64c69ebb049755c540cc352cd801f6cb","runbook.md":"59dbebe3ed6d42273a5ace1e627fe4c469d7e9270b3c3ada6a6ff1b26d6ef343","scripts/backup_restore.py":"fbdd153cc5c4e6c978e5ba1ffa08c939921e158efce00679751b5ba41611b718","security.md":"ee64ef30f3427fe3fba94c28e5edf8ae3e997702f20a87d0d24f1ba7034e187b","sql/001-ledger.sql":"8081a0c1cef17df0e058d1a60fb600bea4ca595ed5ee4aaafba8115acfb9256d","sql/bootstrap.sql":"5ca7d9a6d50cc1b6dc143cee21b94059318b5125c0b2dc0221286d67dab0b41b","tests/integration.py":"e60b8c64f386fa9189e53322d9232a50136524f60fa426d0c631691fad9a1d11","tests/PLAN.md":"166dc38a11c510511a7664dcaf1ffe7aed6c64121e99eaa097980f0532f19d13","tests/test_driver_guards.py":"141ff9f70c77c3580a089cf8478ecb4b9f4df20f106c7858eda8df585e463a68"}
 import io, selectors, shlex, tarfile, time
 
+NETWORK_GUARDS_SHA = 'f41fc462e6033ab464ab3b95054e18458646305ad54dbadcbeba38053c54e11c'
 PACKAGE_URL = 'https://security.ubuntu.com/ubuntu/pool/main/b/bubblewrap/bubblewrap_0.6.1-1ubuntu0.3_amd64.deb'
 PACKAGE_SHA = '706763714e5d19fc7ab2572a6418506e3a4a5d5960e99309707b58117e6b40cb'
 MEMBERS = [{"name":".","type":"5","size":0,"link":""},{"name":"./usr","type":"5","size":0,"link":""},{"name":"./usr/bin","type":"5","size":0,"link":""},{"name":"./usr/bin/bwrap","type":"0","size":72160,"link":""},{"name":"./usr/lib","type":"5","size":0,"link":""},{"name":"./usr/lib/sysctl.d","type":"5","size":0,"link":""},{"name":"./usr/lib/sysctl.d/50-bubblewrap.conf","type":"0","size":403,"link":""},{"name":"./usr/share","type":"5","size":0,"link":""},{"name":"./usr/share/bash-completion","type":"5","size":0,"link":""},{"name":"./usr/share/bash-completion/completions","type":"5","size":0,"link":""},{"name":"./usr/share/bash-completion/completions/bwrap","type":"0","size":1075,"link":""},{"name":"./usr/share/bug","type":"5","size":0,"link":""},{"name":"./usr/share/bug/bubblewrap","type":"0","size":319,"link":""},{"name":"./usr/share/doc","type":"5","size":0,"link":""},{"name":"./usr/share/doc/bubblewrap","type":"5","size":0,"link":""},{"name":"./usr/share/doc/bubblewrap/README.Debian.gz","type":"0","size":2391,"link":""},{"name":"./usr/share/doc/bubblewrap/README.md.gz","type":"0","size":3674,"link":""},{"name":"./usr/share/doc/bubblewrap/changelog.Debian.gz","type":"0","size":2484,"link":""},{"name":"./usr/share/doc/bubblewrap/copyright","type":"0","size":2878,"link":""},{"name":"./usr/share/doc/bubblewrap/examples","type":"5","size":0,"link":""},{"name":"./usr/share/doc/bubblewrap/examples/bubblewrap-shell.sh","type":"0","size":1204,"link":""},{"name":"./usr/share/doc/bubblewrap/examples/flatpak-run.sh","type":"0","size":2642,"link":""},{"name":"./usr/share/doc/bubblewrap/examples/flatpak.bpf","type":"0","size":744,"link":""},{"name":"./usr/share/doc/bubblewrap/examples/userns-block-fd.py","type":"0","size":1012,"link":""},{"name":"./usr/share/man","type":"5","size":0,"link":""},{"name":"./usr/share/man/man1","type":"5","size":0,"link":""},{"name":"./usr/share/man/man1/bwrap.1.gz","type":"0","size":4156,"link":""},{"name":"./usr/share/zsh","type":"5","size":0,"link":""},{"name":"./usr/share/zsh/vendor-completions","type":"5","size":0,"link":""},{"name":"./usr/share/zsh/vendor-completions/_bwrap","type":"0","size":6205,"link":""}]
@@ -339,6 +340,24 @@ def controlled_bwrap_path(directory):
 PARENT_WRAPPER = r'''
 import hashlib,json,os,pathlib,stat,subprocess,sys
 
+def ipv6_rows_are_only_null_rejects(rows):
+    try:
+        if type(rows) is not list or len(rows)>2:return False
+        if not rows:return True
+        total=0
+        for row in rows:
+            if type(row) is not str:return False
+            raw=row.encode('ascii');total+=len(raw)
+            if len(raw)>512 or total>4096:return False
+            f=row.split();widths=(32,2,32,2,32,8,8,8,8)
+            if len(f)!=10:return False
+            if any(len(f[i])!=width or any(c not in '0123456789abcdefABCDEF' for c in f[i]) for i,width in enumerate(widths)):return False
+            if f[0]!='0'*32 or f[1]!='00' or f[2]!='0'*32 or f[3]!='00' or f[4]!='0'*32:return False
+            if f[5].lower()!='ffffffff' or f[7]!='00000000' or f[8].lower()!='00200200' or f[9]!='lo':return False
+            # f[6] is validated-width unsigned reference count, not forwarding semantics.
+        return True
+    except BaseException:return False
+
 def require(value,message):
     if not value: raise RuntimeError(message)
 
@@ -414,9 +433,9 @@ def emit_parent_content(current):
 def validate_parent(host,current):
     require(type(host) is int and type(current['inode']) is int and current['inode']!=host,'Parent network is host/unknown')
     try:
-        if not (current['interfaces']==['lo'] and not current['ipv4'] and not current['ipv6'] and not current['addresses']):emit_parent_content(current)
+        if not (current['interfaces']==['lo'] and not current['ipv4'] and ipv6_rows_are_only_null_rejects(current['ipv6']) and not current['addresses']):emit_parent_content(current)
     except BaseException:pass
-    require(current['interfaces']==['lo'] and not current['ipv4'] and not current['ipv6'] and not current['addresses'],
+    require(current['interfaces']==['lo'] and not current['ipv4'] and ipv6_rows_are_only_null_rejects(current['ipv6']) and not current['addresses'],
             'Parent network is not empty')
 
 def validate_argv(argv,binary):
@@ -566,13 +585,31 @@ def verified_outer_command(inner):
 
 NET_ASSERT = r'''
 import os,pathlib
+def ipv6_rows_are_only_null_rejects(rows):
+    try:
+        if type(rows) is not list or len(rows)>2:return False
+        if not rows:return True
+        total=0
+        for row in rows:
+            if type(row) is not str:return False
+            raw=row.encode('ascii');total+=len(raw)
+            if len(raw)>512 or total>4096:return False
+            f=row.split();widths=(32,2,32,2,32,8,8,8,8)
+            if len(f)!=10:return False
+            if any(len(f[i])!=width or any(c not in '0123456789abcdefABCDEF' for c in f[i]) for i,width in enumerate(widths)):return False
+            if f[0]!='0'*32 or f[1]!='00' or f[2]!='0'*32 or f[3]!='00' or f[4]!='0'*32:return False
+            if f[5].lower()!='ffffffff' or f[7]!='00000000' or f[8].lower()!='00200200' or f[9]!='lo':return False
+            # f[6] is validated-width unsigned reference count, not forwarding semantics.
+        return True
+    except BaseException:return False
+
 parent_net=__CP027_PARENT_NET_INODE__
 host_net=__CP027_HOST_NET_INODE__
 if os.stat('/proc/self/ns/net').st_ino!=parent_net or parent_net==host_net:
     raise SystemExit('Inner network namespace identity mismatch')
 if sorted(line.split(':',1)[0].strip() for line in pathlib.Path('/proc/net/dev').read_text().splitlines()[2:])!=['lo']:
     raise SystemExit('Inner network interface mismatch')
-if pathlib.Path('/proc/net/route').read_text().splitlines()[1:] or pathlib.Path('/proc/net/ipv6_route').read_text().splitlines() or pathlib.Path('/proc/net/if_inet6').read_text().splitlines() or '/32 host LOCAL' in pathlib.Path('/proc/net/fib_trie').read_text():
+if pathlib.Path('/proc/net/route').read_text().splitlines()[1:] or not ipv6_rows_are_only_null_rejects(pathlib.Path('/proc/net/ipv6_route').read_text().splitlines()) or pathlib.Path('/proc/net/if_inet6').read_text().splitlines() or '/32 host LOCAL' in pathlib.Path('/proc/net/fib_trie').read_text():
     raise SystemExit('Inner network route/address not empty')
 '''
 
@@ -629,9 +666,27 @@ with tempfile.TemporaryDirectory(prefix='cp027-ci-') as temporary:
     if any(parent.is_symlink() for parent in (namespace_tests_source,*namespace_tests_source.parents)):
         raise RuntimeError('Namespace test source symlink refused')
     namespace_tests_bytes=namespace_tests_source.read_bytes()
-    if hashlib.sha256(namespace_tests_bytes).hexdigest()!='c873639149ff203308a2be3dcb51b5a6225992720db5e7d85e7fffc3ac41012b':
+    if hashlib.sha256(namespace_tests_bytes).hexdigest()!='3fa2d5af390c8056aee8eed926164c1e9ebe072745550929c0a9f3dde9e867d1':
         raise RuntimeError('Namespace test source changed')
     namespace_tests=private/'namespace-tests.py'; private_file(namespace_tests,namespace_tests_bytes,0o400)
+    network_source=ROOT/'.github/scripts/cp027_network_guards.py'
+    if any(p.is_symlink() for p in (network_source,*network_source.parents)) or not stat.S_ISREG(network_source.lstat().st_mode) or network_source.lstat().st_nlink!=1:
+        raise RuntimeError('Network helper source custody refused')
+    network_bytes=network_source.read_bytes()
+    if hashlib.sha256(network_bytes).hexdigest()!=NETWORK_GUARDS_SHA:raise RuntimeError('Network helper source changed')
+    network_path=private/'network-guards.py';private_file(network_path,network_bytes,0o400)
+    import ast,types
+    network=types.ModuleType('cp027_pinned_network');network.__file__=str(network_path)
+    exec(compile(network_bytes,str(network_path),'exec'),network.__dict__)
+    def pure_node(text,name):
+        return next(n for n in ast.parse(text).body if isinstance(n,ast.FunctionDef) and n.name==name)
+    expected_parser=ast.dump(pure_node(network_bytes.decode(),'ipv6_rows_are_only_null_rejects'),include_attributes=False)
+    if any(ast.dump(pure_node(text,'ipv6_rows_are_only_null_rejects'),include_attributes=False)!=expected_parser for text in (PARENT_WRAPPER,NET_ASSERT)):
+        raise RuntimeError('Network guard parser copies differ')
+    def required_calls(text,name):
+        return [ast.dump(n,include_attributes=False) for n in ast.walk(pure_node(text,name)) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='require']
+    if required_calls(PARENT_WRAPPER,'validate_parent')!=required_calls(network_bytes.decode(),'validate_snapshot'):
+        raise RuntimeError('Native host guard differs from production guard')
     wrapper_source=private/'wrapper-source.sh'
     private_file(wrapper_source,(ROOT/'.github/scripts/validate-cp027-guards.sh').read_bytes(),0o400)
     runtime = pathlib.Path('/usr/bin/python3').resolve(strict=True)
@@ -640,7 +695,7 @@ with tempfile.TemporaryDirectory(prefix='cp027-ci-') as temporary:
         raise SystemExit('Required distro Python runtime unavailable')
     # Bind only the selected Python executable/stdlib and loader libraries, no host tools.
     base = [str(bwrap),'--unshare-all','--share-net','--die-with-parent','--new-session','--clearenv',
-            '--ro-bind',str(staged),'/component','--ro-bind',str(namespace_tests),'/namespace-tests.py','--ro-bind',str(wrapper_source),'/wrapper-source.sh','--dir','/usr','--dir','/usr/bin','--dir','/usr/lib',
+            '--ro-bind',str(staged),'/component','--ro-bind',str(namespace_tests),'/namespace-tests.py','--ro-bind',str(wrapper_source),'/wrapper-source.sh','--ro-bind',str(network_path),'/network-guards.py','--dir','/usr','--dir','/usr/bin','--dir','/usr/lib',
             '--ro-bind',str(runtime),'/usr/bin/python3','--ro-bind',str(stdlib),str(stdlib),
             '--proc','/proc','--dev','/dev','--tmpfs','/tmp','--dir','/home',
             '--setenv','HOME','/home','--setenv','TMPDIR','/tmp','--setenv','LANG','C.UTF-8',
@@ -709,21 +764,35 @@ print('CP027_CONFINEMENT_PROBE_OK')
             cleanup_errors=stop_owned_child(child)
             if child is not None and child.stdin is not None: child.stdin.close()
             if cleanup_errors: raise RuntimeError('Owned child cleanup uncertain; supervisor teardown required')
-    probe_stdout,probe_stderr,probe_lifecycle=confined(probe,phase="confinement-probe")
+    qualifications={}
+    for native_optimized in (False,True):
+        qualified=network.native_pair(network_path,NETWORK_GUARDS_SHA,native_optimized)
+        network.require_qualified(qualified,network_path,native_optimized)
+        qualifications[native_optimized]=qualified
+        subject=qualified.subject
+        print('CP027_NATIVE_PAIR='+json.dumps({'scope':subject['scope'],'optimized':native_optimized,
+              'kernel':subject['kernel'],'positive_before_after':subject['positive_before_after'],
+              'isolated_errno':subject['isolated_errno'],'no_child_nonce':subject['no_child_nonce'],
+              'host_shared_refused':subject['host_shared_refused'],'listener_fd_not_inherited':subject['listener_fd_not_inherited'],
+              'direct_children_reaped':True,'listener_closed_joined':True,'exact_vendor_build':'HOLD'},sort_keys=True),flush=True)
+    def qualified_confined(source,optimized=False,phase="unspecified"):
+        network.require_qualified(qualifications.get(optimized),network_path,optimized)
+        return confined(source,optimized,phase)
+    probe_stdout,probe_stderr,probe_lifecycle=qualified_confined(probe,phase="confinement-probe")
     if probe_stdout.strip()!=b'CP027_CONFINEMENT_PROBE_OK':
         child_failure_diagnostics('confinement-probe-result',None,probe_stdout,probe_stderr,'InvalidProbeResult',[],lifecycle=probe_lifecycle)
         raise RuntimeError('Private binary confinement probe invalid')
     namespace_harness = "import runpy; runpy.run_path('/namespace-tests.py',run_name='__main__')\n"
     for namespace_optimized in (False,True):
-        namespace_stdout,namespace_stderr,namespace_lifecycle=confined(namespace_harness,namespace_optimized,
+        namespace_stdout,namespace_stderr,namespace_lifecycle=qualified_confined(namespace_harness,namespace_optimized,
                 phase='namespace-units-optimized' if namespace_optimized else 'namespace-units-normal')
         namespace_records=[json.loads(line.removeprefix('CP027_NAMESPACE_RESULT=')) for line in namespace_stdout.decode().splitlines()
                            if line.startswith('CP027_NAMESPACE_RESULT=')]
-        if len(namespace_records)!=1 or namespace_records[0]!={'run':34,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}:
+        if len(namespace_records)!=1 or namespace_records[0]!={'run':43,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}:
             child_failure_diagnostics('namespace-units-result',None,namespace_stdout,namespace_stderr,'RejectedNamespaceResult',[],lifecycle=namespace_lifecycle)
             raise RuntimeError('Namespace wrapper unit result rejected')
     for optimized in (False,True):
-        stdout_bytes,stderr_bytes,guard_lifecycle=confined(HARNESS,optimized,phase="guards-optimized" if optimized else "guards-normal")
+        stdout_bytes,stderr_bytes,guard_lifecycle=qualified_confined(HARNESS,optimized,phase="guards-optimized" if optimized else "guards-normal")
         lines=stdout_bytes.decode('utf-8',errors='strict').splitlines()
         records=[json.loads(line.removeprefix('CP027_RESULT=')) for line in lines if line.startswith('CP027_RESULT=')]
         if len(records) != 1:

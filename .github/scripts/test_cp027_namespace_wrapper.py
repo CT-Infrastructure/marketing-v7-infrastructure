@@ -269,13 +269,12 @@ class NamespaceGuards(unittest.TestCase):
         self.assertEqual(self.parent_parser()(writes[0])['parse'],'VALIDATED_DIAGNOSTIC_ONLY')
         return writes[0]
     def test_ipv6_properties_builtin_looking_and_usable_shapes_still_rejected(self):
-        parse=self.ipv6_parser()
-        for row,zero,lo,bit in [(self.ipv6_row(),True,True,9),(self.ipv6_row(f0='20010db8'+'0'*24,f1='40',f4='20010db8'+'0'*23+'1',f8='00000001',f9='PRIVATE_IF'),False,False,0)]:
-            with self.subTest(zero=zero):
-                marker=self.ipv6_failure_marker([row]);record=parse(marker)
-                self.assertEqual(record['parse'],'OBSERVED_PROPERTIES_ONLY');self.assertEqual(record['row_count'],1)
-                self.assertEqual(record['rows'][0]['destination_zero'],zero);self.assertEqual(record['rows'][0]['device_is_lo'],lo);self.assertTrue(record['rows'][0]['flag_bits'][bit])
-                self.assertNotIn(b'20010db8',marker);self.assertNotIn(b'PRIVATE_IF',marker);self.assertNotIn(b'00000200',marker)
+        # Exact null signature is now eligible only behind the mandatory native gate.
+        current=self.parent();current['ipv6']=[self.ipv6_row()]
+        with mock.patch.object(self.ns['os'],'write') as write:self.ns['validate_parent'](1,current)
+        write.assert_not_called()
+        marker=self.ipv6_failure_marker([self.ipv6_row(f0='20010db8'+'0'*24,f1='40',f4='20010db8'+'0'*23+'1',f8='00000001',f9='PRIVATE_IF')]);record=self.ipv6_parser()(marker)
+        self.assertEqual(record['parse'],'OBSERVED_PROPERTIES_ONLY');self.assertFalse(record['rows'][0]['destination_zero']);self.assertFalse(record['rows'][0]['device_is_lo']);self.assertTrue(record['rows'][0]['flag_bits'][0]);self.assertNotIn(b'PRIVATE_IF',marker)
     def test_ipv6_properties_closed_privacy_and_multiple_rows(self):
         marker=self.ipv6_failure_marker([self.ipv6_row(f2='abcd'*8,f3='80',f9='SECRETDEV'),self.ipv6_row()]);record=self.ipv6_parser()(marker)
         self.assertEqual(record['row_count'],2);self.assertEqual(record['rows'][0]['source_prefix_length'],128);self.assertFalse(record['rows'][0]['source_zero'])
@@ -289,15 +288,15 @@ class NamespaceGuards(unittest.TestCase):
         self.assertEqual(self.ipv6_parser()(self.ipv6_failure_marker(['PRIVATE'])),{'parse':'UNKNOWN'})
         self.assertEqual(self.ipv6_parser()(self.ipv6_failure_marker([self.ipv6_row()]*5)),{'parse':'OVERFLOW'})
     def test_ipv6_properties_marker_write_partial_and_json_failure_preserve_guard(self):
-        current=self.parent();current['ipv6']=[self.ipv6_row()]
+        current=self.parent();current['ipv6']=[self.ipv6_row(f8='00200201')]
         for result in (1,OSError('PRIVATE')):
             context=mock.patch.object(self.ns['os'],'write',return_value=result) if type(result) is int else mock.patch.object(self.ns['os'],'write',side_effect=result)
             with context as write,self.assertRaisesRegex(RuntimeError,'Parent network is not empty'):self.ns['validate_parent'](1,current)
             write.assert_called_once()
         with mock.patch.object(json,'dumps',side_effect=RuntimeError('PRIVATE')),self.assertRaisesRegex(RuntimeError,'Parent network is not empty'):self.ns['validate_parent'](1,current)
-        with mock.patch.object(json,'dumps',return_value='x'*2049):self.assertIn(b'OVERFLOW',self.ns['ipv6_route_marker']([self.ipv6_row()]))
+        with mock.patch.object(json,'dumps',return_value='x'*2049):self.assertIn(b'OVERFLOW',self.ns['ipv6_route_marker']([self.ipv6_row(f8='00200201')]))
     def test_ipv6_properties_parser_strict_schema_duplicates_types_and_limits(self):
-        marker=self.ipv6_failure_marker([self.ipv6_row()]);parse=self.ipv6_parser();line=next(x for x in marker.splitlines() if x.startswith(b'CP027_IPV6_PROPERTIES_V1='));body=json.loads(line.split(b'=',1)[1])
+        marker=self.ipv6_failure_marker([self.ipv6_row(f8='00200201')]);parse=self.ipv6_parser();line=next(x for x in marker.splitlines() if x.startswith(b'CP027_IPV6_PROPERTIES_V1='));body=json.loads(line.split(b'=',1)[1])
         invalid=[line+b'\n'+line,b'CP027_IPV6_PROPERTIES_V1={PRIVATE',b'CP027_IPV6_PROPERTIES_V1={"version":1,'+line.split(b'=',1)[1][1:],b'\xff',b'\x1b'+line]
         for key,value in [('version',True),('version',2),('row_count',True),('row_count',0),('row_count',5),('rows',[]),('status','REJECT_ROUTE_SAFE'),('extra','PRIVATE')]:
             changed=dict(body);changed[key]=value;invalid.append(b'CP027_IPV6_PROPERTIES_V1='+json.dumps(changed).encode())
@@ -317,9 +316,97 @@ class NamespaceGuards(unittest.TestCase):
         with mock.patch.object(self,'closed_scope',return_value=scope):self.test_closed_actual_confined_failure_cleanup_survives_diagnostic_failures()
         parser.assert_called_once()
 
+    def network_module(self):
+        import runpy
+        loaded=runpy.run_path('/network-guards.py',run_name='network_unit_definitions')
+        return loaded['require_qualified'].__globals__
+    def test_semantic_parser_copies_full_signature_and_adversarial_mutations(self):
+        module=self.network_module();outer=module['ipv6_rows_are_only_null_rejects'];parent=self.ns['ipv6_rows_are_only_null_rejects']
+        code=next(n.value.value for n in self.tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='NET_ASSERT' for t in n.targets));node=next(n for n in ast.parse(code).body if isinstance(n,ast.FunctionDef) and n.name=='ipv6_rows_are_only_null_rejects');scope={};exec(compile(ast.Module(body=[node],type_ignores=[]),'actual-inner-parser','exec'),scope);inner=scope['ipv6_rows_are_only_null_rejects']
+        common=next(n for n in ast.parse(pathlib.Path('/network-guards.py').read_text()).body if isinstance(n,ast.FunctionDef) and n.name=='ipv6_rows_are_only_null_rejects')
+        self.assertEqual(ast.dump(node,include_attributes=False),ast.dump(common,include_attributes=False))
+        good=self.ipv6_row()
+        invalid=[['PRIVATE'],[good]*3,[good,self.ipv6_row(f8='00200201')],[self.ipv6_row(f0='1'+'0'*31)],[self.ipv6_row(f1='01')],[self.ipv6_row(f2='1'+'0'*31)],[self.ipv6_row(f3='01')],[self.ipv6_row(f4='1'+'0'*31)],[self.ipv6_row(f5='fffffffe')],[self.ipv6_row(f7='00000001')],[self.ipv6_row(f9='eth0')],[good+' EXTRA'],['x'*513]]
+        invalid += [[self.ipv6_row(f8=format(0x00200200^(1<<bit),'08x'))] for bit in range(32)]
+        for fn in (outer,parent,inner):
+            for rows in ([],[good],[good,good],[self.ipv6_row(f6='abcdef01')]):self.assertTrue(fn(rows))
+            for rows in invalid:self.assertFalse(fn(rows))
+    def test_mandatory_native_gate_rejects_flags_hashes_and_prevents_payload(self):
+        module=self.network_module();node=next(n for n in ast.walk(self.tree) if isinstance(n,ast.FunctionDef) and n.name=='qualified_confined')
+        network=mock.Mock();network.require_qualified.side_effect=module['require_qualified'];payload=mock.Mock();scope={'network':network,'qualifications':{},'network_path':'/network-guards.py','confined':payload};exec(compile(ast.Module(body=[node],type_ignores=[]),'actual-qualified-entry','exec'),scope)
+        for fake in (True,False,None,{'qualified':True},'0'*64,object.__new__(module['_Qualification'])):
+            scope['qualifications']={False:fake}
+            with self.assertRaises(RuntimeError):scope['qualified_confined']('payload')
+        payload.assert_not_called()
+        with self.assertRaises(RuntimeError):module['_Qualification'](object(),{})
+    def test_native_qualification_mode_local_and_subject_mutations_fail_closed(self):
+        module=self.network_module();subject={'scope':'LOCAL_NATIVE_ONLY','optimized':False}
+        value=module['_Qualification'](module['_PRIVATE_KEY'],subject);module['_QUALIFICATIONS'][id(value)]=(value,subject)
+        with self.assertRaisesRegex(RuntimeError,'Local native pair'):module['require_qualified'](value,'/network-guards.py',False)
+        with self.assertRaisesRegex(RuntimeError,'mode mismatch'):module['require_qualified'](value,'/network-guards.py',True)
+        fake_os=mock.Mock();fake_os.environ={'GITHUB_ACTIONS':'true','RUNNER_ENVIRONMENT':'github-hosted'};fake_os.getpid.return_value=7;fake_os.getuid.return_value=1001;fake_os.geteuid.return_value=1001;fake_os.getgid.return_value=1001;fake_os.getegid.return_value=1001;fake_os.stat.return_value=type('Info',(),{'st_ino':2})();fake_time=mock.Mock();fake_time.monotonic.return_value=10
+        subject.update(scope='GITHUB_HOSTED_JOB',pid=8,start='s',net=2,uid=1001,gid=1001,finished_monotonic=9,helper_sha256='x',helper_identity=('i',),kernel={'k':1})
+        value.subject=dict(subject)
+        with mock.patch.dict(module,os=fake_os,time=fake_time,_ticks=mock.Mock(return_value='s'),_custody=mock.Mock(return_value=('i',)),kernel_subject=mock.Mock(return_value={'k':1})):
+            with self.assertRaises(RuntimeError):module['require_qualified'](value,'/network-guards.py',False)
+            subject['pid']=7;value.subject=dict(subject);module['kernel_subject'].return_value={'k':2}
+            with self.assertRaisesRegex(RuntimeError,'kernel subject'):module['require_qualified'](value,'/network-guards.py',False)
+    def test_native_child_requires_no_inherited_fd_and_precise_errno(self):
+        import errno
+        module=self.network_module();fake_os=mock.Mock();fake_os.getuid.return_value=1001;fake_os.geteuid.return_value=1001;fake_os.getgid.return_value=1001;fake_os.getegid.return_value=1001;fake_os.fstat.side_effect=OSError(errno.EBADF,'fixture');fake_os.stat.return_value=type('Info',(),{'st_ino':2})()
+        fake_socket=mock.Mock();client=fake_socket.socket.return_value.__enter__.return_value;fake_sys=mock.Mock();fake_sys.flags.optimize=0;snapshot=self.parent()
+        args=['1','12345','a'*32,'9','1001','1001','b'*64]
+        with mock.patch.dict(module,os=fake_os,socket=fake_socket,sys=fake_sys,_custody=mock.Mock(),_no_privileges=mock.Mock(),observe=mock.Mock(return_value=snapshot)):
+            client.connect.side_effect=OSError(errno.ENETUNREACH,'fixture');record=module['_child']('--isolated',args);self.assertEqual(record['errno'],errno.ENETUNREACH);self.assertTrue(record['fd_absent'])
+            for number in (errno.ECONNREFUSED,errno.ETIMEDOUT):
+                client.connect.side_effect=OSError(number,'fixture')
+                with self.assertRaises(RuntimeError):module['_child']('--isolated',args)
+            fake_os.fstat.side_effect=None;fake_os.fstat.return_value=object()
+            with self.assertRaisesRegex(RuntimeError,'descriptor inherited'):module['_child']('--isolated',args)
+        client.sendall.assert_not_called()
+    def test_native_host_shared_actual_guard_refuses_before_socket_or_observation(self):
+        import errno
+        module=self.network_module();fake_os=mock.Mock();fake_os.getuid.return_value=1001;fake_os.geteuid.return_value=1001;fake_os.getgid.return_value=1001;fake_os.getegid.return_value=1001;fake_os.fstat.side_effect=OSError(errno.EBADF,'fixture');fake_os.stat.return_value=type('Info',(),{'st_ino':1})();fake_socket=mock.Mock();observe=mock.Mock();fake_sys=mock.Mock();fake_sys.flags.optimize=0
+        with mock.patch.dict(module,os=fake_os,socket=fake_socket,sys=fake_sys,_custody=mock.Mock(),_no_privileges=mock.Mock(),observe=observe):
+            record=module['_child']('--host-shared',['1','12345','a'*32,'9','1001','1001','b'*64])
+        self.assertEqual(record,{'kind':'HOST_SHARED_REFUSED','payload_executed':False,'fd_absent':True,'optimized':False});observe.assert_not_called();fake_socket.socket.assert_not_called()
+        audit=fake_sys.addaudithook.call_args.args[0]
+        for event,values in [('os.fork',()),('ctypes.dlopen',('x',)),('socket.connect',(None,('192.0.2.1',80)))]:
+            with self.assertRaises(RuntimeError):audit(event,values)
+    def test_native_owned_cleanup_signal_identity_and_wait_failures_reap_direct(self):
+        module=self.network_module();fake_os=mock.Mock();fake_os.getpgid.return_value=7;fake_os.getsid.return_value=7;fake_os.waitid.return_value=object();fake_os.killpg.side_effect=PermissionError('fixture');proc=mock.Mock();proc.pid=7;proc.returncode=None;proc.wait.return_value=0
+        with mock.patch.dict(module,os=fake_os,_ticks=mock.Mock(return_value='s')):
+            with self.assertRaisesRegex(RuntimeError,'supervisor HOLD'):module['_finish'](proc,'s')
+        proc.terminate.assert_called_once();proc.wait.assert_called_once()
+        proc=mock.Mock();proc.pid=7;proc.returncode=None;proc.wait.side_effect=[subprocess.TimeoutExpired('unit',1),0];fake_os.killpg.reset_mock()
+        with mock.patch.dict(module,os=fake_os,_ticks=mock.Mock(return_value='foreign')):
+            with self.assertRaises(RuntimeError):module['_finish'](proc,'s')
+        fake_os.killpg.assert_not_called();proc.kill.assert_called_once();self.assertEqual(proc.wait.call_count,2)
+    def test_native_listener_partial_start_cleanup_never_mints_proof(self):
+        module=self.network_module();fake_os=mock.Mock();fake_os.getuid.return_value=1001;fake_os.geteuid.return_value=1001;fake_os.getgid.return_value=1001;fake_os.getegid.return_value=1001;fake_os.environ={};fake_os.stat.return_value=type('Info',(),{'st_ino':1})();fake_os.urandom.return_value=b'a'*16;fake_socket=mock.Mock();listener=fake_socket.socket.return_value;listener.fileno.return_value=9;listener.get_inheritable.return_value=False;listener.getsockname.return_value=('::1',12345)
+        thread=mock.Mock();thread.ident=77;thread.start.side_effect=RuntimeError('fixturepartialstart');thread.is_alive.return_value=False
+        with mock.patch.dict(module,os=fake_os,socket=fake_socket,_custody=mock.Mock(return_value=('i',)),kernel_subject=mock.Mock(return_value={}),_tool=mock.Mock(return_value={}),_no_privileges=mock.Mock(),_run=mock.Mock()),mock.patch.object(module['threading'],'Thread',return_value=thread):
+            with self.assertRaises(RuntimeError):module['native_pair']('/private/network.py','x',False)
+            module['_run'].assert_not_called()
+        thread.join.assert_called_once_with(timeout=3);listener.close.assert_called_once();self.assertEqual(module['_QUALIFICATIONS'],{})
+    def test_native_kernel_receipt_redacts_suffix_and_bounds(self):
+        module=self.network_module();fake_os=mock.Mock();fake_os.uname.return_value.release='6.8.0-PRIVATE_ACCOUNT_HOST'
+        with mock.patch.dict(module,os=fake_os):
+            value=module['kernel_subject']();self.assertEqual(value['numeric_prefix'],[6,8,0]);self.assertNotIn('PRIVATE',json.dumps(value));self.assertNotIn('ACCOUNT',json.dumps(value));self.assertEqual(len(value['sha256']),64)
+            fake_os.uname.return_value.release='x'*129
+            with self.assertRaises(RuntimeError):module['kernel_subject']()
+
+    def test_native_spawn_reader_setup_failure_still_finishes_owned_child_and_closes_pipes(self):
+        module=self.network_module();proc=mock.Mock();proc.pid=7;proc.returncode=None;proc.stdout.fileno.return_value=8;proc.stderr.fileno.return_value=9
+        selector=mock.Mock();selector.register.side_effect=RuntimeError('reader setup fixture');process=mock.Mock();process.Popen.return_value=proc;fake_os=mock.Mock();finish=mock.Mock(return_value=0)
+        with mock.patch.dict(module,subprocess=process,os=fake_os,_ticks=mock.Mock(return_value='s'),_finish=finish),mock.patch.object(module['selectors'],'DefaultSelector',return_value=selector):
+            with self.assertRaisesRegex(RuntimeError,'reader setup fixture'):module['_run'](['/fixed-tool'],5)
+        finish.assert_called_once_with(proc,'s');selector.close.assert_called_once();proc.stdout.close.assert_called_once();proc.stderr.close.assert_called_once()
+        self.assertTrue(process.Popen.call_args.kwargs['close_fds']);self.assertEqual(process.Popen.call_args.kwargs['pass_fds'],());self.assertTrue(process.Popen.call_args.kwargs['start_new_session'])
+
 if __name__=='__main__':
     result=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(NamespaceGuards))
     record={'run':result.testsRun,'errors':len(result.errors),'failures':len(result.failures),'skips':len(result.skipped),
             'expected_failures':len(result.expectedFailures),'unexpected_successes':len(result.unexpectedSuccesses)}
     print('CP027_NAMESPACE_RESULT='+json.dumps(record,sort_keys=True),flush=True)
-    if record!={'run':34,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}: raise SystemExit(1)
+    if record!={'run':43,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}: raise SystemExit(1)
