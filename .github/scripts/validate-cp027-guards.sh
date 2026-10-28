@@ -59,6 +59,43 @@ def closed_stderr_diagnostic(stderr):
     if len(json.dumps(record,separators=(',',':')).encode('ascii'))>1024:return invalid()
     return record
 
+def parse_parent_content(stderr):
+    # No raw marker or parsing exception is ever returned/published.
+    absent={'parse':'ABSENT'};rejected={'parse':'REJECTED'};prefix='CP027_PARENT_CONTENT_V1='
+    if type(stderr) is not bytes or len(stderr)>4096:return rejected
+    try:
+        text=stderr.decode('utf-8')
+        if any(ord(c)<32 and c not in '\t\n\r' for c in text) or '\x7f' in text:return rejected
+        lines=[line for line in text.splitlines() if line.startswith(prefix)]
+        if not lines:return absent
+        if len(lines)!=1 or len((lines[0]+'\n').encode('utf-8'))>768:return rejected
+        def unique(pairs):
+            value={}
+            for key,item in pairs:
+                if key in value:raise ValueError('Duplicate diagnostic key')
+                value[key]=item
+            return value
+        record=json.loads(lines[0][len(prefix):],object_pairs_hook=unique)
+        booleans=('interfaces_exact_lo','interfaces_has_lo','interfaces_other_present','ipv4_nonempty','ipv6_nonempty',
+                  'addresses_nonempty','fib_ipv4_local_sentinel_present','count_capped')
+        counts=('interfaces_count','ipv4_rows_count','ipv6_rows_count','address_rows_count','non_fib_address_rows_count')
+        if type(record) is not dict or set(record)!=set(booleans+counts+('version',)):return rejected
+        if type(record['version']) is not int or record['version']!=1:return rejected
+        if any(type(record[k]) is not bool for k in booleans) or any(type(record[k]) is not int or not 0<=record[k]<=65535 for k in counts):return rejected
+        n=record['interfaces_count'];lo=record['interfaces_has_lo'];other=record['interfaces_other_present']
+        if (n==0)!=(not lo and not other) or (lo and other and n<2) or (n>1 and not other):return rejected
+        if record['interfaces_exact_lo']!=(n==1 and lo and not other):return rejected
+        for flag,count in (('ipv4_nonempty','ipv4_rows_count'),('ipv6_nonempty','ipv6_rows_count'),('addresses_nonempty','address_rows_count')):
+            if record[flag]!=(record[count]>0):return rejected
+        total=record['non_fib_address_rows_count']+int(record['fib_ipv4_local_sentinel_present'])
+        if record['address_rows_count']!=min(total,65535) or (not record['count_capped'] and total>65535):return rejected
+        if record['count_capped'] and not any(record[k]==65535 for k in counts):return rejected
+        if record['interfaces_exact_lo'] and not record['ipv4_nonempty'] and not record['ipv6_nonempty'] and not record['addresses_nonempty']:return rejected
+        output=dict(record,parse='VALIDATED_DIAGNOSTIC_ONLY')
+        if len(json.dumps(output,separators=(',',':')).encode('ascii'))>1024:return rejected
+        return output
+    except BaseException:return rejected
+
 def child_failure_diagnostics(phase,child,stdout,stderr,cause,cleanup_errors,lifecycle=None):
     """Bounded private retention first; only fixed diagnostic vocabulary is public."""
     started = lifecycle['child_started'] if lifecycle is not None else child is not None
@@ -82,6 +119,8 @@ def child_failure_diagnostics(phase,child,stdout,stderr,cause,cleanup_errors,lif
     try:record['closed_diagnostic']=closed_stderr_diagnostic(stderr)
     except BaseException:
         record['closed_diagnostic']={'origin':'UNKNOWN','exception':'UNKNOWN','guard':'UNKNOWN','parse':'NO_MATCH'}
+    try:record['parent_content']=parse_parent_content(stderr)
+    except BaseException:record['parent_content']={'parse':'REJECTED'}
     record['private_evidence']='UNAVAILABLE'
     try:
         directory=pathlib.Path(tempfile.mkdtemp(prefix='cp027-failure-'))
@@ -275,8 +314,30 @@ def observation():
     return {'inode':os.stat('/proc/self/ns/net').st_ino,'interfaces':interfaces,
             'ipv4':ipv4,'ipv6':ipv6,'addresses':addresses}
 
+def emit_parent_content(current):
+    # Already acquired observation only; never serialize rows or names.
+    try:
+        fields=('interfaces','ipv4','ipv6','addresses')
+        if type(current) is not dict or any(type(current.get(k)) is not list or any(type(x) is not str for x in current[k]) for k in fields):return
+        interfaces=current['interfaces'];addresses=current['addresses'];sentinel='IPv4_LOCAL_ADDRESS_PRESENT'
+        if len(set(interfaces))!=len(interfaces) or addresses.count(sentinel)>1:return
+        counts=[len(current[k]) for k in fields];fib=sentinel in addresses;nonfib=len(addresses)-int(fib)
+        record={'version':1,'interfaces_exact_lo':interfaces==['lo'],'interfaces_count':min(counts[0],65535),
+                'interfaces_has_lo':'lo' in interfaces,'interfaces_other_present':any(x!='lo' for x in interfaces),
+                'ipv4_nonempty':bool(current['ipv4']),'ipv4_rows_count':min(counts[1],65535),
+                'ipv6_nonempty':bool(current['ipv6']),'ipv6_rows_count':min(counts[2],65535),
+                'addresses_nonempty':bool(addresses),'address_rows_count':min(counts[3],65535),
+                'fib_ipv4_local_sentinel_present':fib,'non_fib_address_rows_count':min(nonfib,65535),
+                'count_capped':any(x>65535 for x in counts+[nonfib])}
+        payload=b'CP027_PARENT_CONTENT_V1='+json.dumps(record,separators=(',',':'),sort_keys=True).encode('ascii')+b'\n'
+        if len(payload)<=768:os.write(2,payload)  # One best-effort write; partial output is not proof.
+    except BaseException:pass
+
 def validate_parent(host,current):
     require(type(host) is int and type(current['inode']) is int and current['inode']!=host,'Parent network is host/unknown')
+    try:
+        if not (current['interfaces']==['lo'] and not current['ipv4'] and not current['ipv6'] and not current['addresses']):emit_parent_content(current)
+    except BaseException:pass
     require(current['interfaces']==['lo'] and not current['ipv4'] and not current['ipv6'] and not current['addresses'],
             'Parent network is not empty')
 
@@ -490,7 +551,7 @@ with tempfile.TemporaryDirectory(prefix='cp027-ci-') as temporary:
     if any(parent.is_symlink() for parent in (namespace_tests_source,*namespace_tests_source.parents)):
         raise RuntimeError('Namespace test source symlink refused')
     namespace_tests_bytes=namespace_tests_source.read_bytes()
-    if hashlib.sha256(namespace_tests_bytes).hexdigest()!='f4a1acae24d755f739562b32be7c937922eef38556ffcfea707d09a665036be6':
+    if hashlib.sha256(namespace_tests_bytes).hexdigest()!='a8b212fba7d543b24614f5f68cefa7706ea45bdf12996af0377286a6167abf0c':
         raise RuntimeError('Namespace test source changed')
     namespace_tests=private/'namespace-tests.py'; private_file(namespace_tests,namespace_tests_bytes,0o400)
     wrapper_source=private/'wrapper-source.sh'
@@ -580,7 +641,7 @@ print('CP027_CONFINEMENT_PROBE_OK')
                 phase='namespace-units-optimized' if namespace_optimized else 'namespace-units-normal')
         namespace_records=[json.loads(line.removeprefix('CP027_NAMESPACE_RESULT=')) for line in namespace_stdout.decode().splitlines()
                            if line.startswith('CP027_NAMESPACE_RESULT=')]
-        if len(namespace_records)!=1 or namespace_records[0]!={'run':20,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}:
+        if len(namespace_records)!=1 or namespace_records[0]!={'run':27,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}:
             child_failure_diagnostics('namespace-units-result',None,namespace_stdout,namespace_stderr,'RejectedNamespaceResult',[],lifecycle=namespace_lifecycle)
             raise RuntimeError('Namespace wrapper unit result rejected')
     for optimized in (False,True):

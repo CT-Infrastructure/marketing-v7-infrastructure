@@ -193,9 +193,69 @@ class NamespaceGuards(unittest.TestCase):
         self.assertEqual(record['closed_diagnostic']['exception'],'RuntimeError');self.assertTrue(record['supervisor_teardown_required']);self.assertEqual(record['descendant_teardown'],'UNVERIFIED')
         self.assertEqual(len(captured),1);self.assertNotIn('SECRET',captured[0]);self.assertNotIn('/PRIVATE',captured[0]);self.assertNotIn('account',captured[0])
 
+    def parent_parser(self):
+        node=next(n for n in self.tree.body if isinstance(n,ast.FunctionDef) and n.name=='parse_parent_content')
+        scope={'json':json};exec(compile(ast.Module(body=[node],type_ignores=[]),'actual-parent-content-parser','exec'),scope)
+        return scope['parse_parent_content']
+    def parent_marker(self,current):
+        writes=[]
+        with mock.patch.object(self.ns['os'],'write',side_effect=lambda fd,data:writes.append(data) or len(data)):
+            with self.assertRaisesRegex(RuntimeError,'Parent network is not empty'):self.ns['validate_parent'](1,current)
+        self.assertEqual(len(writes),1);self.assertLessEqual(len(writes[0]),768)
+        return writes[0]
+    def test_parent_content_each_original_operand_and_fib_split(self):
+        parse=self.parent_parser()
+        for key,value,flag in [('interfaces',['lo','PRIVATE_IFACE'],'interfaces_other_present'),('ipv4',['PRIVATE_ROUTE'],'ipv4_nonempty'),('ipv6',['PRIVATE_V6_ROUTE'],'ipv6_nonempty'),('addresses',['PRIVATE_ADDRESS'],'addresses_nonempty'),('addresses',['IPv4_LOCAL_ADDRESS_PRESENT'],'fib_ipv4_local_sentinel_present')]:
+            with self.subTest(key=key,flag=flag):
+                current=self.parent();current[key]=value;marker=self.parent_marker(current);record=parse(marker)
+                self.assertEqual(record['parse'],'VALIDATED_DIAGNOSTIC_ONLY');self.assertTrue(record[flag]);self.assertNotIn(b'PRIVATE',marker)
+                self.assertEqual(record['non_fib_address_rows_count'],int(key=='addresses' and flag!='fib_ipv4_local_sentinel_present'))
+    def test_parent_content_empty_and_identity_first_emit_nothing(self):
+        with mock.patch.object(self.ns['os'],'write') as write:
+            self.ns['validate_parent'](1,self.parent())
+            current=self.parent();current['ipv4']=['PRIVATE']
+            with self.assertRaisesRegex(RuntimeError,'Parent network is host/unknown'):self.ns['validate_parent'](2,current)
+        write.assert_not_called()
+    def test_parent_content_saturation_and_sensitive_rows_are_bounded(self):
+        current=self.parent();current['ipv6']=['SECRET_ADDRESS /private/account env=SECRET']*65536
+        marker=self.parent_marker(current);record=self.parent_parser()(marker)
+        self.assertEqual(record['ipv6_rows_count'],65535);self.assertTrue(record['count_capped']);self.assertEqual(record['parse'],'VALIDATED_DIAGNOSTIC_ONLY')
+        for value in (b'SECRET',b'/private',b'account',b'env='):self.assertNotIn(value,marker)
+        self.assertLessEqual(len(json.dumps(record).encode()),1024)
+    def test_parent_content_marker_partial_and_format_failure_preserve_guard(self):
+        current=self.parent();current['ipv4']=['PRIVATE']
+        with mock.patch.object(self.ns['os'],'write',return_value=1) as write:
+            with self.assertRaisesRegex(RuntimeError,'Parent network is not empty'):self.ns['validate_parent'](1,current)
+        write.assert_called_once()
+        for target in ('write','json'):
+            with self.subTest(target=target):
+                context=mock.patch.object(self.ns['os'],'write',side_effect=OSError('PRIVATE')) if target=='write' else mock.patch.object(json,'dumps',side_effect=RuntimeError('PRIVATE'))
+                with context,self.assertRaisesRegex(RuntimeError,'Parent network is not empty'):self.ns['validate_parent'](1,current)
+        current['ipv4']=[object()]
+        with mock.patch.object(self.ns['os'],'write') as write,self.assertRaisesRegex(RuntimeError,'Parent network is not empty'):self.ns['validate_parent'](1,current)
+        write.assert_not_called()
+    def test_parent_content_parser_rejects_keys_types_conflicts_and_overflow(self):
+        current=self.parent();current['ipv4']=['PRIVATE'];marker=self.parent_marker(current);parse=self.parent_parser();record=json.loads(marker.split(b'=',1)[1])
+        invalid=[b'x'*4097,b'CP027_PARENT_CONTENT_V1={PRIVATE',marker+marker,b'CP027_PARENT_CONTENT_V1='+b'x'*769,b'CP027_PARENT_CONTENT_V1={"version":1,'+marker.split(b'=',1)[1][1:],b'\xff',b'\x1b'+marker]
+        for key,value in [('version',True),('version',2),('interfaces_count',True),('ipv4_rows_count',-1),('ipv4_rows_count',65536),('ipv4_nonempty',False),('count_capped',True),('interfaces_exact_lo',False),('address_rows_count',1),('extra','SECRET')]:
+            changed=dict(record);changed[key]=value;invalid.append(b'CP027_PARENT_CONTENT_V1='+json.dumps(changed).encode())
+        changed=dict(record);changed.pop('ipv6_nonempty');invalid.append(b'CP027_PARENT_CONTENT_V1='+json.dumps(changed).encode())
+        for raw in invalid:
+            with self.subTest(size=len(raw)):self.assertEqual(parse(raw),{'parse':'REJECTED'})
+        self.assertEqual(parse(b'no marker PRIVATE'),{'parse':'ABSENT'})
+    def test_parent_content_parser_rejects_false_empty_and_address_incoherence(self):
+        current=self.parent();current['addresses']=['IPv4_LOCAL_ADDRESS_PRESENT'];marker=self.parent_marker(current);parse=self.parent_parser();record=json.loads(marker.split(b'=',1)[1])
+        for changes in ({'non_fib_address_rows_count':1},{'fib_ipv4_local_sentinel_present':False},{'address_rows_count':0,'addresses_nonempty':False,'fib_ipv4_local_sentinel_present':False}):
+            changed=dict(record);changed.update(changes)
+            self.assertEqual(parse(b'CP027_PARENT_CONTENT_V1='+json.dumps(changed).encode()),{'parse':'REJECTED'})
+    def test_parent_content_parser_failure_preserves_actual_confined_cleanup(self):
+        scope=self.closed_scope();parser=mock.Mock(side_effect=RuntimeError('PRIVATE'));scope['parse_parent_content']=parser
+        with mock.patch.object(self,'closed_scope',return_value=scope):self.test_closed_actual_confined_failure_cleanup_survives_diagnostic_failures()
+        parser.assert_called_once()
+
 if __name__=='__main__':
     result=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(NamespaceGuards))
     record={'run':result.testsRun,'errors':len(result.errors),'failures':len(result.failures),'skips':len(result.skipped),
             'expected_failures':len(result.expectedFailures),'unexpected_successes':len(result.unexpectedSuccesses)}
     print('CP027_NAMESPACE_RESULT='+json.dumps(record,sort_keys=True),flush=True)
-    if record!={'run':20,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}: raise SystemExit(1)
+    if record!={'run':27,'errors':0,'failures':0,'skips':0,'expected_failures':0,'unexpected_successes':0}: raise SystemExit(1)
